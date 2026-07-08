@@ -232,15 +232,25 @@ def main():
 
     split_total = 0
     inline_total = 0
+    expected_generated_tasks = 0
+    expected_worklet_session_tasks = 0
+    expected_direct_session_tasks = 0
+    expected_call_only_wrappers = 0
     print("XML=%s" % args.xml)
     print("threshold=%s workflows=%s worklets=%s sessions=%s" % (args.threshold, len(workflows), len(worklets), len(sessions)))
     for workflow in workflows:
         wf_name = workflow.attrib.get("NAME", "")
         names = workflow_worklets(workflow)
+        direct_sessions = [
+            task_name(inst)
+            for inst in direct_task_instances(workflow)
+            if task_type(inst) == "Session" and task_name(inst)
+        ]
         expanded = sum(len(worklet_session_refs(worklets[name])) for name in names if name in worklets)
         parent_large = len(names) >= args.threshold or expanded >= args.threshold
         split_names = []
         inline_names = []
+        worklet_session_tasks = 0
         for name in names:
             worklet = worklets.get(name)
             if worklet is None:
@@ -250,12 +260,20 @@ def main():
             reasons = split_reasons(worklet, refs, uses[name], parent_large, args.threshold, sessions)
             if refs and reasons:
                 split_names.append((name, reasons, len(refs)))
+                if len(refs) >= args.threshold:
+                    worklet_session_tasks += len(refs)
             else:
                 inline_names.append(name)
         split_total += len(split_names)
         inline_total += len(inline_names)
-        print("WORKFLOW name=%s worklet_calls=%s expanded_sessions=%s split=%s inline=%s" % (
-            wf_name, len(names), expanded, len(split_names), len(inline_names)))
+        direct_session_tasks = len(direct_sessions) if split_names else 0
+        workflow_expected = 1 + direct_session_tasks + len(split_names) + worklet_session_tasks
+        expected_generated_tasks += workflow_expected
+        expected_worklet_session_tasks += worklet_session_tasks
+        expected_direct_session_tasks += direct_session_tasks
+        expected_call_only_wrappers += 1 + sum(1 for _, _, ref_count in split_names if ref_count >= args.threshold)
+        print("WORKFLOW name=%s worklet_calls=%s direct_sessions=%s expanded_sessions=%s split=%s inline=%s expected_tasks=%s" % (
+            wf_name, len(names), len(direct_sessions), expanded, len(split_names), len(inline_names), workflow_expected))
         for name, reasons, ref_count in split_names:
             print("  SPLIT worklet=%s sessions=%s reasons=%s" % (name, ref_count, ",".join(reasons)))
 
@@ -270,7 +288,8 @@ def main():
             print("  SQL_ISSUE context=%s issue=%s" % (context, issue))
     else:
         print("SQL_SHAPE PASS queries=%s issues=0" % sql_count)
-    print("SUMMARY split_worklets=%s inline_worklets=%s" % (split_total, inline_total))
+    print("SUMMARY split_worklets=%s inline_worklets=%s expected_generated_tasks=%s direct_session_tasks=%s worklet_session_tasks=%s call_only_wrappers=%s" % (
+        split_total, inline_total, expected_generated_tasks, expected_direct_session_tasks, expected_worklet_session_tasks, expected_call_only_wrappers))
     return 1 if sql_issues else 0
 
 
