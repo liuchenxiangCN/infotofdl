@@ -113,11 +113,23 @@ echo "Compiling core parsing files..."
 
 # Service layer files (may need servlet API - continue on failure)
 echo "Compiling service files..."
-"$JAVAC" -encoding UTF-8 -cp "$CP" -d "$BUILD_DIR/classes" \
+SERVICE_SOURCES=()
+for service_source in \
   src/com/fr/plugin/tptj/ivan/jsd19083/service/impl/AbstractPluginServiceImpl.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/service/impl/PluginServiceImpl.java \
-  src/com/fr/plugin/tptj/ivan/jsd19083/service/impl/XMLFileUploadService.java \
-  2>/dev/null || echo "  (service compilation skipped - using existing class files)"
+  src/com/fr/plugin/tptj/ivan/jsd19083/service/impl/XMLFileUploadService.java
+do
+  if [ -f "$service_source" ]; then
+    SERVICE_SOURCES+=("$service_source")
+  fi
+done
+
+if [ ${#SERVICE_SOURCES[@]} -gt 0 ]; then
+  "$JAVAC" -encoding UTF-8 -cp "$CP" -d "$BUILD_DIR/classes" "${SERVICE_SOURCES[@]}" \
+    2>/dev/null || echo "  (service compilation skipped - using existing class files)"
+else
+  echo "  (no service source files present - using existing class files)"
+fi
 
 if [ $? -ne 0 ]; then
   echo "Compilation failed"
