@@ -12,6 +12,7 @@ import java.util.Map;
 public class InvokeTaskNodeBean extends DefaultSingleXMLNodeBean {
     private String targetTaskName;
     private String targetTaskID;
+    private String targetFolder;
     private boolean spreadParam;
     private List<Map<String, String>> workParams = new ArrayList<Map<String, String>>();
     private List<Map<String, String>> nodeParams = new ArrayList<Map<String, String>>();
@@ -20,6 +21,11 @@ public class InvokeTaskNodeBean extends DefaultSingleXMLNodeBean {
         super(x, y, name, id);
         this.targetTaskName = targetTaskName;
         this.targetTaskID = targetTaskID;
+    }
+
+    public InvokeTaskNodeBean(int x, int y, String name, String id, String targetTaskName, String targetTaskID, String targetFolder) {
+        this(x, y, name, id, targetTaskName, targetTaskID);
+        this.targetFolder = targetFolder;
     }
 
     public InvokeTaskNodeBean(int x, int y, String name, String id, String targetTaskName) {
@@ -34,7 +40,7 @@ public class InvokeTaskNodeBean extends DefaultSingleXMLNodeBean {
     public String getTargetTaskID() {
         try {
             if (targetTaskID == null || targetTaskID.trim().length() == 0) {
-                targetTaskID = FDLService.INSTANCE.getTaskId(targetTaskName);
+                targetTaskID = FDLService.INSTANCE.getTaskId(targetTaskName, targetFolder);
             }
             return targetTaskID;
         } catch (Exception e) {

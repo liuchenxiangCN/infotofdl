@@ -3,9 +3,13 @@ set -e
 
 SRC_DIR="src"
 BUILD_DIR="build"
-PLUGIN_NAME="fine-plugin-com.fr.plugin.tptj.ivan.jsd19083-0.3.0"
+PLUGIN_ID="com.fr.plugin.tptj.ivan.jsd19083"
+PLUGIN_VERSION="${PLUGIN_VERSION:-0.4.0}"
+PLUGIN_NAME="fine-plugin-${PLUGIN_ID}-${PLUGIN_VERSION}"
 FDL_HOME="${FDL_HOME:-/mnt/d/FDL-tomcat-win64}"
-INSTALLED_PLUGIN_DIR="${INSTALLED_PLUGIN_DIR:-$FDL_HOME/webapps/webroot/WEB-INF/plugins/plugin-com.fr.plugin.tptj.ivan.jsd19083-0.3.0}"
+SOURCE_PLUGIN_VERSION="${SOURCE_PLUGIN_VERSION:-0.3.0}"
+SOURCE_PLUGIN_NAME="${SOURCE_PLUGIN_NAME:-fine-plugin-${PLUGIN_ID}-${SOURCE_PLUGIN_VERSION}}"
+INSTALLED_PLUGIN_DIR="${INSTALLED_PLUGIN_DIR:-$FDL_HOME/webapps/webroot/WEB-INF/plugins/plugin-${PLUGIN_ID}-${SOURCE_PLUGIN_VERSION}}"
 JDK_BIN="${JDK_BIN:-$FDL_HOME/jdk/bin}"
 JAVAC="${JAVAC:-$JDK_BIN/javac.exe}"
 JAR="${JAR:-$JDK_BIN/jar.exe}"
@@ -34,9 +38,9 @@ if [ ! -f "pluginkit-10.0-20231122.jar" ] && [ -f "$INSTALLED_PLUGIN_DIR/plugink
   cp "$INSTALLED_PLUGIN_DIR/pluginkit-10.0-20231122.jar" .
 fi
 
-if [ ! -d "jar-contents" ] && [ -f "$INSTALLED_PLUGIN_DIR/$PLUGIN_NAME.jar" ]; then
+if [ ! -d "jar-contents" ] && [ -f "$INSTALLED_PLUGIN_DIR/$SOURCE_PLUGIN_NAME.jar" ]; then
   mkdir -p jar-contents
-  unzip -q "$INSTALLED_PLUGIN_DIR/$PLUGIN_NAME.jar" -d jar-contents
+  unzip -q "$INSTALLED_PLUGIN_DIR/$SOURCE_PLUGIN_NAME.jar" -d jar-contents
 fi
 
 if [ ! -d "jar-contents" ]; then

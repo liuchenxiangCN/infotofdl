@@ -250,7 +250,6 @@ def main():
         parent_large = len(names) >= args.threshold or expanded >= args.threshold
         split_names = []
         inline_names = []
-        worklet_session_tasks = 0
         for name in names:
             worklet = worklets.get(name)
             if worklet is None:
@@ -260,20 +259,18 @@ def main():
             reasons = split_reasons(worklet, refs, uses[name], parent_large, args.threshold, sessions)
             if refs and reasons:
                 split_names.append((name, reasons, len(refs)))
-                if len(refs) >= args.threshold:
-                    worklet_session_tasks += len(refs)
             else:
                 inline_names.append(name)
         split_total += len(split_names)
         inline_total += len(inline_names)
-        direct_session_tasks = len(direct_sessions) if split_names else 0
-        workflow_expected = 1 + direct_session_tasks + len(split_names) + worklet_session_tasks
+        direct_session_tasks = 0
+        worklet_session_tasks = 0
+        workflow_expected = 1 + len(split_names)
         expected_generated_tasks += workflow_expected
         expected_worklet_session_tasks += worklet_session_tasks
         expected_direct_session_tasks += direct_session_tasks
-        expected_call_only_wrappers += 1 + sum(1 for _, _, ref_count in split_names if ref_count >= args.threshold)
-        print("WORKFLOW name=%s worklet_calls=%s direct_sessions=%s expanded_sessions=%s split=%s inline=%s expected_tasks=%s" % (
-            wf_name, len(names), len(direct_sessions), expanded, len(split_names), len(inline_names), workflow_expected))
+        print("WORKFLOW name=%s worklet_calls=%s direct_sessions=%s direct_sessions_inline=%s expanded_sessions=%s split=%s inline=%s expected_tasks=%s" % (
+            wf_name, len(names), len(direct_sessions), len(direct_sessions), expanded, len(split_names), len(inline_names), workflow_expected))
         for name, reasons, ref_count in split_names:
             print("  SPLIT worklet=%s sessions=%s reasons=%s" % (name, ref_count, ",".join(reasons)))
 

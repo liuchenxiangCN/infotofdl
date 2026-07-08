@@ -29,6 +29,10 @@ public enum FDLService {
 
 
     public String getTaskId(String taskName) throws Exception {
+        return this.getTaskId(taskName, "");
+    }
+
+    public String getTaskId(String taskName, String folderPath) throws Exception {
         if (StringUtils.isEmpty((String)taskName)) {
             throw new RuntimeException(String.format("任务名: [%s]. 任务名不能为空.", taskName));
         }
@@ -57,13 +61,71 @@ public enum FDLService {
         taskSearchDTO.setNodeFindDTO(nodeFindDTO);
         WorkManageResultDTO<OfflineWorkConfigDTO> result = SDKService.INSTANCE.getWorkManageService().search(FineUtils.getAdminUserId(), taskSearchDTO);
         List<OfflineWorkConfigDTO> records = result.getRecords();
+        String firstMatchedNameId = null;
+        int matchedNameCount = 0;
+        List<String> matchedFolders = new ArrayList<String>();
         if (records != null) {
             for (OfflineWorkConfigDTO task : records) {
                 if (!StringUtils.equals((String)taskName, (String)task.getWorkName())) continue;
-                return task.getWorkId();
+                matchedNameCount++;
+                if (firstMatchedNameId == null) {
+                    firstMatchedNameId = task.getWorkId();
+                }
+                matchedFolders.add(task.getFolder());
+                if (matchesFolder(task.getFolder(), folderPath)) {
+                    return task.getWorkId();
+                }
             }
         }
+        if (firstMatchedNameId != null) {
+            if (StringUtils.isNotEmpty((String)folderPath) && matchedNameCount > 1) {
+                throw new RuntimeException(String.format("任务名: [%s]. 存在多个同名任务，但未找到当前目录 [%s] 下的活动任务. 候选目录: [%s]",
+                    taskName, folderPath, joinLimited(matchedFolders)));
+            }
+            return firstMatchedNameId;
+        }
         throw new RuntimeException(String.format("任务名: [%s]. 未找到任务.", taskName));
+    }
+
+    private static boolean matchesFolder(String actualFolder, String expectedFolder) {
+        if (StringUtils.isEmpty((String)expectedFolder)) {
+            return true;
+        }
+        String actual = normalizeFolder(actualFolder);
+        String expected = normalizeFolder(expectedFolder);
+        return StringUtils.equals((String)actual, (String)expected);
+    }
+
+    private static String normalizeFolder(String folder) {
+        if (folder == null) {
+            return "";
+        }
+        String normalized = folder.replace('\\', '/').trim();
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private static String joinLimited(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        int limit = Math.min(values.size(), 5);
+        for (int i = 0; i < limit; i++) {
+            if (builder.length() > 0) {
+                builder.append(", ");
+            }
+            builder.append(values.get(i));
+        }
+        if (values.size() > limit) {
+            builder.append(", ...");
+        }
+        return builder.toString();
     }
 
     public LineDTO generateLineDTO(String from, String to, String lineType, String lineCondition) {
