@@ -83,6 +83,8 @@ public class DataSyncParser {
     private static final String FDL_DATASOURCE_ADAPTER_REQUIRED = "fdl_adapter_required";
     private static final String CONNECTION_TYPE_OVERRIDE_PROPERTY = "infa.fdl.connection.type.overrides";
     private static final String CONNECTION_TYPE_OVERRIDE_ENV = "INFA_FDL_CONNECTION_TYPE_OVERRIDES";
+    private static final String WORKLET_SPLIT_THRESHOLD_PROPERTY = "infa.fdl.worklet.split.task.threshold";
+    private static final int DEFAULT_WORKLET_SPLIT_TASK_THRESHOLD = 8;
     private static final Map<String, String> CONNECTION_NAME_DATASOURCE_TYPE_OVERRIDES = new HashMap<String, String>();
 
     public static DataSyncParseNodeBean parse(Document doc, XPath xpath, TaskEvalBean extraParam) throws Exception {
@@ -133,7 +135,8 @@ public class DataSyncParser {
             workletGroupMap = DataSyncParser.buildWorkletGroups(doc, xpath, extraParam);
         }
         List<DataSyncParseNodeBean> subTasks = new ArrayList<DataSyncParseNodeBean>();
-        List<String> allSubTaskNames = new ArrayList<String>();
+        Map<String, Integer> workletUseCounts = DataSyncParser.countWorkflowWorkletUses(workflowElems);
+        Set<String> createdSplitTaskNames = new LinkedHashSet<String>();
         LogUtil.info("Processing " + workflowElems.getLength() + " WORKFLOW elements");
         for (int i = 0; i < workflowElems.getLength(); i++) {
             Element workflowElem = (Element)workflowElems.item(i);
@@ -143,75 +146,284 @@ public class DataSyncParser {
             wfSessionNames.addAll(wfInlineSessionNames);
             Set<String> wfWorkletNames = DataSyncParser.getWorkflowWorkletNames(workflowElem);
             LogUtil.info("Workflow [" + wfName + "]: " + wfSessionNames.size() + " sessions (inline=" + wfInlineSessionNames.size() + "), " + wfWorkletNames.size() + " worklets");
+            Set<String> splitWorkletNames = DataSyncParser.selectSplitWorklets(doc, wfWorkletNames, workletGroupMap, workletUseCounts);
+            Set<String> inlineWorkletNames = new LinkedHashSet<String>(wfWorkletNames);
+            inlineWorkletNames.removeAll(splitWorkletNames);
+            for (String workletName : splitWorkletNames) {
+                String childTaskName = DataSyncParser.splitWorkletTaskName(wfName, workletName, workletUseCounts);
+                if (createdSplitTaskNames.contains(childTaskName)) {
+                    continue;
+                }
+                List<GroupSQLInfo> childGroups = DataSyncParser.copyGroupSQLInfos(workletGroupMap.get(workletName));
+                for (GroupSQLInfo childGroup : childGroups) {
+                    DataSyncParser.substituteSqlParams(childGroup, wfName, workletName, parameterResolver,
+                        DataSyncParser.scopeForGroup(doc, wfName, workletName, childGroup));
+                }
+                AtomicInteger childX = new AtomicInteger(-200);
+                AtomicInteger childY = new AtomicInteger(-200);
+                List<GroupNodeInfoBean> childNodes = DataSyncParser.getGroupNodeInfoBeans(doc, xpath, extraParam, childGroups, childX, childY, new ArrayList<GroupNodeInfoBean>());
+                List<Link> childLinks = DataSyncParser.getSplitWorkletTaskLinks(doc, wfName, workletName, childNodes, childX, childY, parameterResolver);
+                List<ParamEntity> childParams = DataSyncParser.createWorkletTaskParams(doc, parameterResolver, mappingParamsMap, wfName, workletName, childGroups);
+                subTasks.add(DataSyncParseNodeBean.create(folder, childTaskName).addGroups(childNodes).addLinks(childLinks).addParams(childParams));
+                createdSplitTaskNames.add(childTaskName);
+                LogUtil.info("Workflow [" + wfName + "] split worklet [" + workletName + "] into CALL_TASK target [" + childTaskName + "]");
+            }
             List<GroupSQLInfo> wfGroups = new ArrayList<GroupSQLInfo>();
             for (String name : wfSessionNames) {
                 GroupSQLInfo g = sessionMap.get(name);
                 if (g != null) {
-                    wfGroups.add(g);
+                    wfGroups.add(DataSyncParser.copyGroupSQLInfo(g));
                 }
             }
-            for (String name : wfWorkletNames) {
+            for (String name : inlineWorkletNames) {
                 List<GroupSQLInfo> wlGroups = workletGroupMap.get(name);
                 if (wlGroups != null) {
-                    wfGroups.addAll(wlGroups);
+                    wfGroups.addAll(DataSyncParser.copyGroupSQLInfos(wlGroups));
                 }
             }
             for (GroupSQLInfo g : wfGroups) {
-                String workletScope = wfWorkletNames.contains(g.getGroupName()) ? g.getGroupName() : "";
+                String workletScope = inlineWorkletNames.contains(g.getGroupName()) ? g.getGroupName() : "";
                 DataSyncParser.substituteSqlParams(g, wfName, workletScope, parameterResolver,
                     DataSyncParser.scopeForGroup(doc, wfName, workletScope, g));
             }
             AtomicInteger currentX = new AtomicInteger(-200);
             AtomicInteger currentY = new AtomicInteger(-200);
             List<GroupNodeInfoBean> nodes = DataSyncParser.getGroupNodeInfoBeans(doc, xpath, extraParam, wfGroups, currentX, currentY, new ArrayList<GroupNodeInfoBean>());
+            for (String workletName : splitWorkletNames) {
+                DataSyncParser.addInvokeTaskGroup(nodes, workletName,
+                    DataSyncParser.splitWorkletTaskName(wfName, workletName, workletUseCounts), currentX, currentY);
+            }
             List<Link> links = XmlParserUtil.getDirectWorkflowLinks(workflowElem);
             Set<String> knownNames = new LinkedHashSet<String>();
             knownNames.addAll(wfSessionNames);
-            knownNames.addAll(wfWorkletNames);
+            knownNames.addAll(inlineWorkletNames);
+            knownNames.addAll(splitWorkletNames);
             Set<String> conditionNodeNames = DataSyncParser.addDecisionConditionGroups(nodes, workflowElem, links, knownNames, currentX, currentY,
                 "Workflow " + wfName, parameterResolver, new InfaScopedParameterResolver.Scope(wfName, "", "", ""));
-            links.addAll(DataSyncParser.getConditionalWorkletLinks(doc, wfName, wfWorkletNames, nodes, knownNames, conditionNodeNames, currentX, currentY, parameterResolver));
+            links.addAll(DataSyncParser.getConditionalWorkletLinks(doc, wfName, inlineWorkletNames, nodes, knownNames, conditionNodeNames, currentX, currentY, parameterResolver));
             links = DataSyncParser.resolveConnectorLinks(links, knownNames);
             links = DataSyncParser.materializeConditionalLinks(nodes, links, knownNames, conditionNodeNames, currentX, currentY, wfName);
             List<ParamEntity> wfParams = new ArrayList<ParamEntity>();
             wfParams.addAll(DataSyncParser.parseWorkflowVariables(parameterResolver, wfName, ""));
             Set<String> resolvedMappings = new HashSet<String>();
-            NodeList allSessions = doc.getElementsByTagName(TAG_SESSION);
-            for (String sessionName : wfSessionNames) {
-                for (int s = 0; s < allSessions.getLength(); s++) {
-                    Element sessionEl = (Element) allSessions.item(s);
-                    if (!sessionName.equals(sessionEl.getAttribute(TAG_NAME))) continue;
-                    String mappingName = sessionEl.getAttribute("MAPPINGNAME");
-                    if (StringUtils.isNotEmpty(mappingName) && resolvedMappings.add(mappingName)) {
-                        List<ParamEntity> mappingParams = mappingParamsMap.get(mappingName);
-                        if (mappingParams != null) wfParams.addAll(mappingParams);
-                    }
-                    break;
-                }
-            }
-            for (String workletName : wfWorkletNames) {
+            DataSyncParser.addMappingParamsForSessions(doc, wfSessionNames, mappingParamsMap, resolvedMappings, wfParams);
+            for (String workletName : inlineWorkletNames) {
                 wfParams.addAll(DataSyncParser.parseWorkflowVariables(parameterResolver, wfName, workletName));
                 List<GroupSQLInfo> wlGroups = workletGroupMap.get(workletName);
                 if (wlGroups == null) continue;
-                for (GroupSQLInfo wlGroup : wlGroups) {
-                    String sessionName = wlGroup.getName();
-                    for (int s = 0; s < allSessions.getLength(); s++) {
-                        Element sessionEl = (Element) allSessions.item(s);
-                        if (!sessionName.equals(sessionEl.getAttribute(TAG_NAME))) continue;
-                        String mappingName = sessionEl.getAttribute("MAPPINGNAME");
-                        if (StringUtils.isNotEmpty(mappingName) && resolvedMappings.add(mappingName)) {
-                            List<ParamEntity> mappingParams = mappingParamsMap.get(mappingName);
-                            if (mappingParams != null) wfParams.addAll(mappingParams);
-                        }
-                        break;
-                    }
-                }
+                DataSyncParser.addMappingParamsForGroupSessions(doc, wlGroups, mappingParamsMap, resolvedMappings, wfParams);
             }
             DataSyncParseNodeBean subTask = DataSyncParseNodeBean.create(folder, wfName).addGroups(nodes).addLinks(links).addParams(wfParams);
             subTasks.add(subTask);
-            allSubTaskNames.add(wfName);
         }
         return subTasks;
+    }
+
+    private static Map<String, Integer> countWorkflowWorkletUses(NodeList workflowElems) {
+        Map<String, Integer> result = new LinkedHashMap<String, Integer>();
+        if (workflowElems == null) {
+            return result;
+        }
+        for (int i = 0; i < workflowElems.getLength(); i++) {
+            Element workflowElem = (Element)workflowElems.item(i);
+            for (String workletName : DataSyncParser.getWorkflowWorkletNames(workflowElem)) {
+                Integer count = result.get(workletName);
+                result.put(workletName, count == null ? 1 : count + 1);
+            }
+        }
+        return result;
+    }
+
+    private static Set<String> selectSplitWorklets(Document doc, Set<String> workletNames,
+        Map<String, List<GroupSQLInfo>> workletGroupMap, Map<String, Integer> workletUseCounts) {
+        Set<String> result = new LinkedHashSet<String>();
+        int threshold = DataSyncParser.getWorkletSplitThreshold();
+        int expandedSessionCount = 0;
+        for (String workletName : workletNames) {
+            List<GroupSQLInfo> groups = workletGroupMap.get(workletName);
+            expandedSessionCount += groups == null ? 0 : groups.size();
+        }
+        boolean parentLarge = workletNames.size() >= threshold || expandedSessionCount >= threshold;
+        for (String workletName : workletNames) {
+            Element workletElem = DataSyncParser.findWorkletElement(doc, workletName);
+            List<GroupSQLInfo> groups = workletGroupMap.get(workletName);
+            if (workletElem == null || groups == null || groups.isEmpty()) {
+                continue;
+            }
+            int useCount = DataSyncParser.getMapCount(workletUseCounts, workletName);
+            if (parentLarge || DataSyncParser.shouldSplitWorklet(workletElem, groups, useCount, threshold)) {
+                result.add(workletName);
+            }
+        }
+        return result;
+    }
+
+    private static boolean shouldSplitWorklet(Element workletElem, List<GroupSQLInfo> groups, int useCount, int threshold) {
+        Map<String, String> directTaskTypes = DataSyncParser.getDirectTaskInstanceTypes(workletElem);
+        if (groups.size() >= threshold || directTaskTypes.size() >= threshold) {
+            return true;
+        }
+        if (useCount > 1) {
+            return true;
+        }
+        if (directTaskTypes.containsValue("Worklet")) {
+            return true;
+        }
+        if (DataSyncParser.hasConditionOrDecision(workletElem, XmlParserUtil.getDirectWorkflowLinks(workletElem))) {
+            return true;
+        }
+        for (GroupSQLInfo group : groups) {
+            if (group != null && group.getApiConfig() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int getWorkletSplitThreshold() {
+        Integer value = Integer.getInteger(WORKLET_SPLIT_THRESHOLD_PROPERTY, DEFAULT_WORKLET_SPLIT_TASK_THRESHOLD);
+        if (value == null || value.intValue() < 1) {
+            return DEFAULT_WORKLET_SPLIT_TASK_THRESHOLD;
+        }
+        return value.intValue();
+    }
+
+    private static int getMapCount(Map<String, Integer> values, String key) {
+        Integer value = values.get(key);
+        return value == null ? 0 : value.intValue();
+    }
+
+    private static String splitWorkletTaskName(String workflowName, String workletName, Map<String, Integer> workletUseCounts) {
+        if (DataSyncParser.getMapCount(workletUseCounts, workletName) > 1 && StringUtils.isNotEmpty(workflowName)) {
+            return workflowName + "__" + workletName;
+        }
+        return workletName;
+    }
+
+    private static void addInvokeTaskGroup(List<GroupNodeInfoBean> nodes, String workletName, String targetTaskName,
+        AtomicInteger currentX, AtomicInteger currentY) {
+        DefaultGroupNodeInfoBean group = new DefaultGroupNodeInfoBean(workletName);
+        currentY.set(currentY.get() + 200);
+        currentX.set(-200);
+        currentX.set(currentX.get() + 240);
+        InvokeTaskNodeBean invokeNode = new InvokeTaskNodeBean(currentX.get(), currentY.get(), workletName, UUID.randomUUID().toString(), targetTaskName);
+        invokeNode.setSpreadParam(true);
+        group.addNode(invokeNode);
+        nodes.add(group);
+    }
+
+    private static List<Link> getSplitWorkletTaskLinks(Document doc, String workflowName, String workletName,
+        List<GroupNodeInfoBean> nodes, AtomicInteger currentX, AtomicInteger currentY,
+        InfaScopedParameterResolver parameterResolver) {
+        Element workletElem = DataSyncParser.findWorkletElement(doc, workletName);
+        if (workletElem == null) {
+            return new ArrayList<Link>();
+        }
+        List<Link> links = XmlParserUtil.getDirectWorkflowLinks(workletElem);
+        Set<String> knownNames = DataSyncParser.getDirectTaskNames(workletElem);
+        Set<String> conditionNodeNames = DataSyncParser.addDecisionConditionGroups(nodes, workletElem, links, knownNames,
+            currentX, currentY, "Worklet " + workletName, parameterResolver,
+            new InfaScopedParameterResolver.Scope(workflowName, workletName, "", ""));
+        links = DataSyncParser.resolveConnectorLinks(links, knownNames);
+        links = DataSyncParser.materializeConditionalLinks(nodes, links, knownNames, conditionNodeNames, currentX, currentY, workletName);
+        return links;
+    }
+
+    private static List<ParamEntity> createWorkletTaskParams(Document doc, InfaScopedParameterResolver parameterResolver,
+        Map<String, List<ParamEntity>> mappingParamsMap, String workflowName, String workletName, List<GroupSQLInfo> groups) {
+        List<ParamEntity> params = new ArrayList<ParamEntity>();
+        params.addAll(DataSyncParser.parseWorkflowVariables(parameterResolver, workflowName, ""));
+        params.addAll(DataSyncParser.parseWorkflowVariables(parameterResolver, workflowName, workletName));
+        Set<String> resolvedMappings = new HashSet<String>();
+        DataSyncParser.addMappingParamsForGroupSessions(doc, groups, mappingParamsMap, resolvedMappings, params);
+        return params;
+    }
+
+    private static void addMappingParamsForGroupSessions(Document doc, List<GroupSQLInfo> groups,
+        Map<String, List<ParamEntity>> mappingParamsMap, Set<String> resolvedMappings, List<ParamEntity> params) {
+        Set<String> sessionNames = new LinkedHashSet<String>();
+        if (groups != null) {
+            for (GroupSQLInfo group : groups) {
+                if (group != null && StringUtils.isNotEmpty(group.getName())) {
+                    sessionNames.add(group.getName());
+                }
+            }
+        }
+        DataSyncParser.addMappingParamsForSessions(doc, sessionNames, mappingParamsMap, resolvedMappings, params);
+    }
+
+    private static void addMappingParamsForSessions(Document doc, Set<String> sessionNames,
+        Map<String, List<ParamEntity>> mappingParamsMap, Set<String> resolvedMappings, List<ParamEntity> params) {
+        NodeList allSessions = doc.getElementsByTagName(TAG_SESSION);
+        for (String sessionName : sessionNames) {
+            for (int s = 0; s < allSessions.getLength(); s++) {
+                Element sessionEl = (Element) allSessions.item(s);
+                if (!sessionName.equals(sessionEl.getAttribute(TAG_NAME))) {
+                    continue;
+                }
+                String mappingName = sessionEl.getAttribute("MAPPINGNAME");
+                if (StringUtils.isNotEmpty(mappingName) && resolvedMappings.add(mappingName)) {
+                    List<ParamEntity> mappingParams = mappingParamsMap.get(mappingName);
+                    if (mappingParams != null) {
+                        params.addAll(mappingParams);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    private static List<GroupSQLInfo> copyGroupSQLInfos(List<GroupSQLInfo> source) {
+        List<GroupSQLInfo> result = new ArrayList<GroupSQLInfo>();
+        if (source == null) {
+            return result;
+        }
+        for (GroupSQLInfo group : source) {
+            GroupSQLInfo copy = DataSyncParser.copyGroupSQLInfo(group);
+            if (copy != null) {
+                result.add(copy);
+            }
+        }
+        return result;
+    }
+
+    private static GroupSQLInfo copyGroupSQLInfo(GroupSQLInfo source) {
+        if (source == null) {
+            return null;
+        }
+        GroupSQLInfo copy = new GroupSQLInfo();
+        copy.setGroupName(source.getGroupName());
+        copy.setName(source.getName());
+        copy.setFromDBName(source.getFromDBName());
+        copy.setFromDBType(source.getFromDBType());
+        copy.setToDBName(source.getToDBName());
+        copy.setToDBType(source.getToDBType());
+        copy.setTargetTable(source.getTargetTable());
+        copy.setTargetSchema(source.getTargetSchema());
+        copy.setApiConfig(source.getApiConfig());
+        copy.setFieldLineageInfo(source.getFieldLineageInfo());
+        copy.setTargetWriteInfo(source.getTargetWriteInfo());
+        List<SQLInfo> sqlInfos = new ArrayList<SQLInfo>();
+        for (SQLInfo sqlInfo : source.getSqlInfos()) {
+            sqlInfos.add(DataSyncParser.copySQLInfo(sqlInfo));
+        }
+        copy.setSqlInfos(sqlInfos);
+        for (ConnectionMappingInfo connectionInfo : source.getConnectionInfos()) {
+            copy.addConnectionInfo(connectionInfo);
+        }
+        return copy;
+    }
+
+    private static SQLInfo copySQLInfo(SQLInfo source) {
+        SQLInfo copy = new SQLInfo();
+        if (source == null) {
+            return copy;
+        }
+        copy.setSqlQuery(source.getSqlQuery());
+        copy.setPreSQL(source.getPreSQL());
+        copy.setPostSQL(source.getPostSQL());
+        copy.setTruncate(source.getTruncate());
+        return copy;
     }
 
     private static Set<String> getWorkflowSessionNames(Element workflowElem) {
@@ -1110,11 +1322,12 @@ public class DataSyncParser {
                     sqlQuery = DataSyncParser.applyFilterSqlPushdown(sqlQuery, groupSQLInfo.getFieldLineageInfo());
                     sqlQuery = DataSyncParser.applyLookupSqlJoin(sqlQuery, groupSQLInfo.getFieldLineageInfo(), fromDBName);
                 }
-            } else {
-                apiPostProjectionTransformInfo = DataSyncParser.createApiPostExpressionTransformInfo(
-                    groupSQLInfo.getFieldLineageInfo(), groupSQLInfo.getApiConfig(), sqlQuery);
-            }
-            DBNodeFromInfoBean fromInfo = DBNodeFromInfoBean.create().datasourceType(fromDBType).connectionName(fromDBName).sql(sqlQuery);
+                } else {
+                    apiPostProjectionTransformInfo = DataSyncParser.createApiPostExpressionTransformInfo(
+                        groupSQLInfo.getFieldLineageInfo(), groupSQLInfo.getApiConfig(), sqlQuery);
+                }
+                DataSyncParser.validateReaderSqlShape(sqlQuery, name);
+                DBNodeFromInfoBean fromInfo = DBNodeFromInfoBean.create().datasourceType(fromDBType).connectionName(fromDBName).sql(sqlQuery);
             DBNodeToInfoBean toInfo;
             try {
                 toInfo = DBNodeToInfoBean.create().datasourceType(toDBType).connectionName(toDBName).tableName(targetTable).databaseName("").schema(DataSyncParser.resolveSchema(toDBName, extraParam.getToDBName())).targetWriteInfo(groupSQLInfo.getTargetWriteInfo());
@@ -2304,6 +2517,61 @@ public class DataSyncParser {
         return !java.util.regex.Pattern.compile("(?i)\\b(INSERT|UPDATE|DELETE|MERGE|CALL|EXEC|TRUNCATE|DROP|ALTER|CREATE)\\b").matcher(withoutStrings).find();
     }
 
+    private static void validateReaderSqlShape(String sql, String nodeName) {
+        if (!StringUtils.isNotEmpty(sql)) {
+            return;
+        }
+        String trimmed = sql.trim();
+        if (!trimmed.toUpperCase().startsWith("SELECT")) {
+            return;
+        }
+        String selectList = DataSyncParser.extractTopLevelSelectList(trimmed);
+        if (!StringUtils.isNotEmpty(selectList)) {
+            return;
+        }
+        if (selectList.endsWith(",")) {
+            throw new RuntimeException("Invalid reader SQL shape for node [" + nodeName + "]: SELECT list ends with comma before FROM");
+        }
+        for (String item : DataSyncParser.splitSqlSelectItems(selectList)) {
+            if (DataSyncParser.containsTopLevelSqlWord(item, "FROM")) {
+                throw new RuntimeException("Invalid reader SQL shape for node [" + nodeName + "]: SELECT item contains top-level FROM: " + item);
+            }
+        }
+    }
+
+    private static boolean containsTopLevelSqlWord(String text, String word) {
+        String source = text == null ? "" : text;
+        int depth = 0;
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+            if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+            if (inSingleQuote || inDoubleQuote) {
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+                continue;
+            }
+            if (c == ')' && depth > 0) {
+                depth--;
+                continue;
+            }
+            if (depth == 0 && DataSyncParser.startsWithSqlWord(source, i, word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static String uniqueLookupNodeName(String transformationName, int index) {
         String base = transformationName == null ? "" : transformationName.trim().replaceAll("[^A-Za-z0-9_]+", "_");
         if (!StringUtils.isNotEmpty(base)) {
@@ -2742,13 +3010,7 @@ public class DataSyncParser {
         for (int j = 0; j < instNodes.getLength(); j++) {
             Element instEl = (Element) instNodes.item(j);
             if ("SOURCE".equals(instEl.getAttribute("TYPE"))) {
-                String dbdName = instEl.getAttribute("DBDNAME");
-                String name = instEl.getAttribute(TAG_NAME);
-                if (StringUtils.isNotEmpty(dbdName)) {
-                    tableName = dbdName + "." + name;
-                } else {
-                    tableName = name;
-                }
+                tableName = DataSyncParser.firstNonEmpty(instEl.getAttribute("TRANSFORMATION_NAME"), instEl.getAttribute(TAG_NAME));
                 break;
             }
         }
