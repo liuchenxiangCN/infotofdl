@@ -1,0 +1,25 @@
+# Build artifacts
+plugin-src/build/
+plugin-src/jar-contents/
+plugin-src/*.jar
+plugin-src/*.zip
+plugin-src/META-INF/
+*.class
+__pycache__/
+*.pyc
+logs/
+
+# Library JARs
+plugin-src/lib/
+
+# Local agent/workflow state
+.claude/
+.omo/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

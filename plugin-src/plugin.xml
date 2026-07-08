@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<plugin>
+    <id>com.fr.plugin.tptj.ivan.jsd19083</id>
+    <name><![CDATA[FDL XML批量生成任务_EK]]></name>
+    <active>yes</active>
+    <version>0.3.0</version>
+    <group>fdl</group>
+    <env-version>4.2.10.1</env-version>
+    <vendor>Ivan.Guo</vendor>
+    <jartime>2025-08-01</jartime>
+    <description><![CDATA[FDL XML批量生成任务_EK]]></description>
+    <change-notes><![CDATA[
+          [2025-09-17]0.0.1: JSD-19083 插件初始化<br/>
+          [2025-10-16]0.0.2: 文件上传接口去掉授权认证<br/>
+          [2025-10-20]0.0.3: 目标表通过XML读取、通过WORKFLOWLINE获取连线信息、m_开头的节点要查询s_节点的连线信息<br/>
+          [2025-10-20]0.0.4: 写入默认的database和schema<br/>
+          [2025-10-20]0.0.5: 通过正则表达式获取database<br/>
+          [2025-10-20]0.0.6: 字段匹配不区分大小写<br/>
+          [2025-10-20]0.0.7: 数据同步任务不再创建虚拟节点<br/>
+          [2025-10-20]0.0.8: 查询字段报错时，返回空字段映射避免报错<br/>
+          [2025-10-23]0.1.0: 支持选择一级目录<br/>
+          [2026-05-24]0.2.0: 支持PowerCenter9 Worklet类型任务解析、FOLDER级别可复用SESSION展开<br/>
+          [2026-06-11]0.3.0: 多WORKFLOW支持、日期参数自动转为全局动态参数、目标表解析优化<br/>
+    ]]></change-notes>
+    <main-package>com.fr.plugin.tptj.ivan.jsd19083</main-package>
+    <lifecycle-monitor class="com.fr.plugin.tptj.ivan.jsd19083.LifecycleMonitorEK"/>
+    <function-recorder class="com.fr.plugin.tptj.ivan.jsd19083.provider.GetControllers"/>
+    <extra-core>
+        <SparkUDFPluginProvider class="com.fr.plugin.tptj.ivan.jsd19083.udf.InfaRowApiUdfProvider"/>
+    </extra-core>
+    <extra-decision>
+        <ControllerRegisterProvider
+                class="com.fr.plugin.tptj.ivan.jsd19083.provider.GetControllers"/>
+        <SystemOptionProvider class="com.fr.plugin.tptj.ivan.jsd19083.provider.DtoAddOption"/>
+    </extra-decision>
+</plugin>
