@@ -86,8 +86,8 @@ extends DefaultSingleXMLNodeBean {
             DPConditionItem item = new DPConditionItem();
             item.setNextNodeId(branch.nextNodeId);
             item.setNextNodeName(branch.nextNodeName);
-            item.setConditionString(branch.condition);
-            item.setDescription("Informatica condition: " + branch.condition + " [" + branch.analysis.getClassification() + "]");
+            item.setConditionString(branch.getFdlConditionString());
+            item.setDescription(branch.getFdlDescription());
             if (STATUS_EXECUTABLE.equals(branch.analysis.getStatus()) && branch.analysis.getConditionEntity() != null) {
                 item.setConditionEntity(branch.analysis.getConditionEntity());
             }
@@ -536,6 +536,25 @@ extends DefaultSingleXMLNodeBean {
             this.nextNodeName = StringUtils.isNotEmpty(nextNodeName) ? nextNodeName : nextNodeId;
             this.condition = StringUtils.isNotEmpty(condition) ? condition : "";
             this.analysis = analysis == null ? ConditionNodeBean.analyzeCondition(this.condition) : analysis;
+        }
+
+        String getFdlConditionString() {
+            if (CLASSIFICATION_EXECUTABLE_DECISION_OUTPUT_BINDING.equals(this.analysis.getClassification())
+                && STATUS_EXECUTABLE.equals(this.analysis.getStatus())
+                && this.analysis.getConditionEntity() != null) {
+                return "true";
+            }
+            return this.condition;
+        }
+
+        String getFdlDescription() {
+            String fdlCondition = this.getFdlConditionString();
+            if (!fdlCondition.equals(this.condition)) {
+                return "FDL executable condition: " + fdlCondition
+                    + "; original Informatica condition: " + this.condition
+                    + " [" + this.analysis.getClassification() + "]";
+            }
+            return "Informatica condition: " + this.condition + " [" + this.analysis.getClassification() + "]";
         }
     }
 

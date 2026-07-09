@@ -3,7 +3,7 @@
     <id>com.fr.plugin.tptj.ivan.jsd19083</id>
     <name><![CDATA[FDL XML批量生成任务_EK]]></name>
     <active>yes</active>
-    <version>0.4.0</version>
+    <version>0.5.0</version>
     <group>fdl</group>
     <env-version>4.2.10.1</env-version>
     <vendor>Ivan.Guo</vendor>
@@ -22,6 +22,7 @@
           [2026-05-24]0.2.0: 支持PowerCenter9 Worklet类型任务解析、FOLDER级别可复用SESSION展开<br/>
           [2026-06-11]0.3.0: 多WORKFLOW支持、日期参数自动转为全局动态参数、目标表解析优化<br/>
           [2026-07-08]0.4.0: 按Informatica Workflow/Worklet层级拆分任务、调用任务按目录解析、批量保存重复任务继续处理<br/>
+          [2026-07-09]0.5.0: SQL表名按FDL连接Schema补全、SQL运行期参数保留FDL占位符、Decision分支生成可执行判断条件<br/>
     ]]></change-notes>
     <main-package>com.fr.plugin.tptj.ivan.jsd19083</main-package>
     <lifecycle-monitor class="com.fr.plugin.tptj.ivan.jsd19083.LifecycleMonitorEK"/>

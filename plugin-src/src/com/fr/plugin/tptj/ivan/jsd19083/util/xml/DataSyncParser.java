@@ -83,6 +83,8 @@ public class DataSyncParser {
     private static final String FDL_DATASOURCE_ADAPTER_REQUIRED = "fdl_adapter_required";
     private static final String CONNECTION_TYPE_OVERRIDE_PROPERTY = "infa.fdl.connection.type.overrides";
     private static final String CONNECTION_TYPE_OVERRIDE_ENV = "INFA_FDL_CONNECTION_TYPE_OVERRIDES";
+    private static final String CONNECTION_SCHEMA_OVERRIDE_PROPERTY = "infa.fdl.connection.schema.overrides";
+    private static final String CONNECTION_SCHEMA_OVERRIDE_ENV = "INFA_FDL_CONNECTION_SCHEMA_OVERRIDES";
     private static final String WORKLET_SPLIT_THRESHOLD_PROPERTY = "infa.fdl.worklet.split.task.threshold";
     private static final int DEFAULT_WORKLET_SPLIT_TASK_THRESHOLD = 8;
     private static final Map<String, String> CONNECTION_NAME_DATASOURCE_TYPE_OVERRIDES = new HashMap<String, String>();
@@ -1344,6 +1346,7 @@ public class DataSyncParser {
                 }
             }
             String sqlQuery = !sqlQueryList.isEmpty() ? String.join((CharSequence)" union all ", sqlQueryList) : "";
+            sqlQuery = DataSyncParser.qualifyReaderSqlTableReferences(doc, groupSQLInfo, sqlQuery, fromDBName, fromDBType);
             DataFlowTransformInfo dataFlowTransformInfo = null;
             DataFlowTransformInfo apiPostProjectionTransformInfo = null;
             if (groupSQLInfo.getApiConfig() == null) {
@@ -1529,6 +1532,333 @@ public class DataSyncParser {
 
     private static String sanitizeSqlComment(String value) {
         return value == null ? "" : value.replace("/*", "/ *").replace("*/", "* /").replace('\n', ' ');
+    }
+
+    private static String qualifyReaderSqlTableReferences(Document doc, GroupSQLInfo groupSQLInfo,
+                                                          String sql, String connectionName, String datasourceType) {
+        if (!StringUtils.isNotEmpty(sql) || !DataSyncParser.supportsSqlTableQualification(datasourceType)) {
+            return sql;
+        }
+        String connectionSchema = DataSyncParser.resolveReaderSqlConnectionSchema(connectionName);
+        Map<String, String> sourceOwners = DataSyncParser.collectSourceOwnerByTable(doc,
+            groupSQLInfo == null ? "" : DataSyncParser.findSessionMappingName(doc, groupSQLInfo.getName()));
+        if (!StringUtils.isNotEmpty(connectionSchema) && sourceOwners.isEmpty()) {
+            return sql;
+        }
+        return DataSyncParser.qualifySqlTableReferences(sql, connectionSchema, sourceOwners);
+    }
+
+    private static boolean supportsSqlTableQualification(String datasourceType) {
+        String normalized = DataSyncParser.normalizeConnectionKey(datasourceType);
+        return normalized.contains("ORACLE")
+            || normalized.contains("POSTGRESQL")
+            || normalized.contains("POSTGRES")
+            || normalized.contains("SQLSERVER")
+            || normalized.contains("MSSQL")
+            || normalized.contains("MYSQL")
+            || normalized.contains("MARIADB")
+            || normalized.contains("DB2");
+    }
+
+    private static String resolveReaderSqlConnectionSchema(String connectionName) {
+        String configured = DataSyncParser.resolveConfiguredConnectionSchema(connectionName);
+        if (StringUtils.isNotEmpty(configured)) {
+            return configured;
+        }
+        if (!StringUtils.isNotEmpty(connectionName)) {
+            return "";
+        }
+        try {
+            String defaultSchema = FineUtils.getDefaultSchema(connectionName);
+            if (StringUtils.isNotEmpty(defaultSchema)) {
+                return defaultSchema;
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
+    }
+
+    private static String resolveConfiguredConnectionSchema(String connectionName) {
+        String configured = DataSyncParser.findConnectionTypeOverride(System.getProperty(CONNECTION_SCHEMA_OVERRIDE_PROPERTY), connectionName);
+        if (StringUtils.isNotEmpty(configured)) {
+            return configured;
+        }
+        try {
+            configured = DataSyncParser.findConnectionTypeOverride(System.getenv(CONNECTION_SCHEMA_OVERRIDE_ENV), connectionName);
+        } catch (Throwable ignored) {
+            configured = "";
+        }
+        return configured;
+    }
+
+    private static Map<String, String> collectSourceOwnerByTable(Document doc, String mappingName) {
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        Element mappingEl = DataSyncParser.findMappingElement(doc, mappingName);
+        if (mappingEl == null) {
+            return result;
+        }
+        NodeList instances = mappingEl.getElementsByTagName(TAG_INSTANCE);
+        for (int i = 0; i < instances.getLength(); i++) {
+            Element instEl = (Element) instances.item(i);
+            if (!"SOURCE".equals(instEl.getAttribute(TAG_TYPE))) {
+                continue;
+            }
+            String tableName = DataSyncParser.firstNonEmpty(instEl.getAttribute("TRANSFORMATION_NAME"), instEl.getAttribute(TAG_NAME));
+            String ownerName = DataSyncParser.extractOwnerNameFromSource(doc, tableName);
+            if (!StringUtils.isNotEmpty(tableName) || !StringUtils.isNotEmpty(ownerName)) {
+                continue;
+            }
+            DataSyncParser.putUniqueSourceOwner(result, tableName, ownerName);
+            String instanceName = instEl.getAttribute(TAG_NAME);
+            if (StringUtils.isNotEmpty(instanceName)) {
+                DataSyncParser.putUniqueSourceOwner(result, instanceName, ownerName);
+            }
+        }
+        return result;
+    }
+
+    private static void putUniqueSourceOwner(Map<String, String> owners, String tableName, String ownerName) {
+        String key = DataSyncParser.normalizeSqlObjectKey(tableName);
+        if (!StringUtils.isNotEmpty(key) || !StringUtils.isNotEmpty(ownerName)) {
+            return;
+        }
+        if (!owners.containsKey(key)) {
+            owners.put(key, ownerName);
+            return;
+        }
+        String existing = owners.get(key);
+        if (!existing.equalsIgnoreCase(ownerName)) {
+            owners.put(key, "");
+        }
+    }
+
+    private static String qualifySqlTableReferences(String sql, String connectionSchema, Map<String, String> sourceOwners) {
+        StringBuilder result = new StringBuilder();
+        int i = 0;
+        int depth = 0;
+        int fromListDepth = -1;
+        boolean expectTable = false;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (c == '\'') {
+                int end = DataSyncParser.copySqlQuotedString(sql, i, result);
+                i = end;
+                continue;
+            }
+            if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
+                int end = DataSyncParser.copySqlLineComment(sql, i, result);
+                i = end;
+                continue;
+            }
+            if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
+                int end = DataSyncParser.copySqlBlockComment(sql, i, result);
+                i = end;
+                continue;
+            }
+            if (expectTable) {
+                if (Character.isWhitespace(c)) {
+                    result.append(c);
+                    i++;
+                    continue;
+                }
+                if (c == '(') {
+                    result.append(c);
+                    depth++;
+                    expectTable = false;
+                    i++;
+                    continue;
+                }
+                SqlIdentifierToken token = DataSyncParser.readSqlIdentifierToken(sql, i);
+                if (token.isValid()) {
+                    result.append(DataSyncParser.qualifySqlTableToken(token.text, sql, token.end, connectionSchema, sourceOwners));
+                    i = token.end;
+                    expectTable = false;
+                    continue;
+                }
+                expectTable = false;
+            }
+            if (c == '(') {
+                depth++;
+                result.append(c);
+                i++;
+                continue;
+            }
+            if (c == ')') {
+                if (depth > 0) {
+                    depth--;
+                }
+                if (fromListDepth > depth) {
+                    fromListDepth = -1;
+                }
+                result.append(c);
+                i++;
+                continue;
+            }
+            if (c == ',' && fromListDepth == depth) {
+                expectTable = true;
+                result.append(c);
+                i++;
+                continue;
+            }
+            SqlIdentifierToken word = DataSyncParser.readSqlIdentifierToken(sql, i);
+            if (word.isValid()) {
+                String upper = word.text.toUpperCase(Locale.ROOT);
+                result.append(word.text);
+                if (DataSyncParser.isSqlTableReferenceKeyword(upper)) {
+                    expectTable = true;
+                    if ("FROM".equals(upper)) {
+                        fromListDepth = depth;
+                    }
+                } else if (fromListDepth == depth && DataSyncParser.isSqlFromListTerminator(upper)) {
+                    fromListDepth = -1;
+                    expectTable = false;
+                }
+                i = word.end;
+                continue;
+            }
+            result.append(c);
+            i++;
+        }
+        return result.toString();
+    }
+
+    private static String qualifySqlTableToken(String token, String sql, int tokenEnd,
+                                               String connectionSchema, Map<String, String> sourceOwners) {
+        if (!StringUtils.isNotEmpty(token) || token.indexOf('.') >= 0 || token.indexOf('@') >= 0 || token.startsWith("$")) {
+            return token;
+        }
+        if (DataSyncParser.isPseudoTableName(token) || DataSyncParser.nextNonWhitespaceChar(sql, tokenEnd) == '(') {
+            return token;
+        }
+        String safeTable = DataSyncParser.safeSqlIdentifier(token);
+        if (!StringUtils.isNotEmpty(safeTable)) {
+            return token;
+        }
+        String schema = StringUtils.isNotEmpty(connectionSchema)
+            ? connectionSchema
+            : sourceOwners.get(DataSyncParser.normalizeSqlObjectKey(token));
+        String qualified = DataSyncParser.qualifiedTableName(schema, safeTable);
+        return StringUtils.isNotEmpty(qualified) ? qualified : token;
+    }
+
+    private static boolean isSqlTableReferenceKeyword(String upper) {
+        return "FROM".equals(upper)
+            || "JOIN".equals(upper);
+    }
+
+    private static boolean isSqlFromListTerminator(String upper) {
+        return "WHERE".equals(upper)
+            || "GROUP".equals(upper)
+            || "ORDER".equals(upper)
+            || "HAVING".equals(upper)
+            || "UNION".equals(upper)
+            || "MINUS".equals(upper)
+            || "INTERSECT".equals(upper)
+            || "CONNECT".equals(upper)
+            || "START".equals(upper)
+            || "MODEL".equals(upper);
+    }
+
+    private static boolean isPseudoTableName(String token) {
+        return "DUAL".equalsIgnoreCase(token);
+    }
+
+    private static int copySqlQuotedString(String sql, int start, StringBuilder result) {
+        int i = start;
+        result.append(sql.charAt(i++));
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            result.append(c);
+            i++;
+            if (c == '\'') {
+                if (i < sql.length() && sql.charAt(i) == '\'') {
+                    result.append(sql.charAt(i));
+                    i++;
+                    continue;
+                }
+                break;
+            }
+        }
+        return i;
+    }
+
+    private static int copySqlLineComment(String sql, int start, StringBuilder result) {
+        int i = start;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            result.append(c);
+            i++;
+            if (c == '\n' || c == '\r') {
+                break;
+            }
+        }
+        return i;
+    }
+
+    private static int copySqlBlockComment(String sql, int start, StringBuilder result) {
+        int i = start;
+        result.append(sql.charAt(i++));
+        result.append(sql.charAt(i++));
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            result.append(c);
+            i++;
+            if (c == '*' && i < sql.length() && sql.charAt(i) == '/') {
+                result.append(sql.charAt(i));
+                i++;
+                break;
+            }
+        }
+        return i;
+    }
+
+    private static SqlIdentifierToken readSqlIdentifierToken(String sql, int start) {
+        if (start >= sql.length() || !DataSyncParser.isSqlIdentifierStart(sql.charAt(start))) {
+            return SqlIdentifierToken.invalid(start);
+        }
+        int i = start + 1;
+        while (i < sql.length() && DataSyncParser.isSqlIdentifierPart(sql.charAt(i))) {
+            i++;
+        }
+        return new SqlIdentifierToken(sql.substring(start, i), i);
+    }
+
+    private static boolean isSqlIdentifierStart(char c) {
+        return Character.isLetter(c) || c == '_' || c == '$';
+    }
+
+    private static boolean isSqlIdentifierPart(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '#' || c == '.';
+    }
+
+    private static char nextNonWhitespaceChar(String text, int start) {
+        int i = start;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+            i++;
+        }
+        return i < text.length() ? text.charAt(i) : '\0';
+    }
+
+    private static String normalizeSqlObjectKey(String value) {
+        return value == null ? "" : value.trim().replace("\"", "").replace("`", "").replace("[", "").replace("]", "").toUpperCase(Locale.ROOT);
+    }
+
+    private static class SqlIdentifierToken {
+        private final String text;
+        private final int end;
+
+        private SqlIdentifierToken(String text, int end) {
+            this.text = text == null ? "" : text;
+            this.end = end;
+        }
+
+        static SqlIdentifierToken invalid(int start) {
+            return new SqlIdentifierToken("", start);
+        }
+
+        boolean isValid() {
+            return StringUtils.isNotEmpty(text) && end >= 0;
+        }
     }
 
     private static class TargetDeletePlan {
@@ -4871,13 +5201,75 @@ public class DataSyncParser {
         InfaScopedParameterResolver.Declaration declaration = resolution.getDeclaration();
         boolean quotedLiteral = DataSyncParser.isSingleQuotedToken(sql, start, end);
         if (declaration != null && InfaScopedParameterResolver.DEFAULT_XML_EMPTY.equals(declaration.getDefaultSource())) {
+            String placeholder = DataSyncParser.sqlRuntimeParameterPlaceholder(resolution);
+            if (StringUtils.isNotEmpty(placeholder)) {
+                return placeholder;
+            }
             return quotedLiteral ? "" : "NULL";
         }
         String replacementText = resolution.getReplacementText();
         if (StringUtils.isNotEmpty(replacementText) && !replacementText.startsWith("${INFA_RUNTIME:")) {
             return replacementText;
         }
+        String placeholder = DataSyncParser.sqlRuntimeParameterPlaceholder(resolution);
+        if (StringUtils.isNotEmpty(placeholder)) {
+            return placeholder;
+        }
         return quotedLiteral ? "" : "NULL";
+    }
+
+    private static String sqlRuntimeParameterPlaceholder(InfaScopedParameterResolver.Resolution resolution) {
+        if (!DataSyncParser.isSqlRuntimeParameterResolution(resolution)) {
+            return "";
+        }
+        String name = "";
+        InfaScopedParameterResolver.Declaration declaration = resolution.getDeclaration();
+        if (declaration != null) {
+            name = DataSyncParser.normalizeParamEntityName(declaration.getName());
+        }
+        if (!StringUtils.isNotEmpty(name)) {
+            name = DataSyncParser.runtimeParameterNameFromReference(resolution.getReference());
+        }
+        if (!DataSyncParser.isSafeFdlSqlParameterName(name)) {
+            return "";
+        }
+        return "${" + name + "}";
+    }
+
+    private static boolean isSqlRuntimeParameterResolution(InfaScopedParameterResolver.Resolution resolution) {
+        if (resolution == null) {
+            return false;
+        }
+        String kind = resolution.getKind();
+        return InfaScopedParameterResolver.KIND_MAPPING_VARIABLE.equals(kind)
+            || InfaScopedParameterResolver.KIND_MAPPING_PARAMETER.equals(kind)
+            || InfaScopedParameterResolver.KIND_WORKFLOW_VARIABLE.equals(kind)
+            || InfaScopedParameterResolver.KIND_BRACED_PARAMETER.equals(kind);
+    }
+
+    private static String runtimeParameterNameFromReference(String reference) {
+        String raw = reference == null ? "" : reference.trim();
+        if (raw.startsWith("${") && raw.endsWith("}") && raw.length() > 3) {
+            return raw.substring(2, raw.length() - 1).trim();
+        }
+        return DataSyncParser.normalizeParamEntityName(raw);
+    }
+
+    private static boolean isSafeFdlSqlParameterName(String name) {
+        if (!StringUtils.isNotEmpty(name)) {
+            return false;
+        }
+        char first = name.charAt(0);
+        if (!Character.isLetter(first) && first != '_') {
+            return false;
+        }
+        for (int i = 1; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (!Character.isLetterOrDigit(c) && c != '_') {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isSingleQuotedToken(String text, int start, int end) {
