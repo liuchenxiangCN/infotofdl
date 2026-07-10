@@ -1538,16 +1538,7 @@ public class DataSyncParser {
 
     private static String qualifyReaderSqlTableReferences(Document doc, GroupSQLInfo groupSQLInfo,
                                                           String sql, String connectionName, String datasourceType) {
-        if (!StringUtils.isNotEmpty(sql) || !DataSyncParser.supportsSqlTableQualification(datasourceType)) {
-            return sql;
-        }
-        String connectionSchema = DataSyncParser.resolveReaderSqlConnectionSchema(connectionName);
-        Map<String, String> sourceOwners = DataSyncParser.collectSourceOwnerByTable(doc,
-            groupSQLInfo == null ? "" : DataSyncParser.findSessionMappingName(doc, groupSQLInfo.getName()));
-        if (!StringUtils.isNotEmpty(connectionSchema) && sourceOwners.isEmpty()) {
-            return sql;
-        }
-        return DataSyncParser.qualifySqlTableReferences(sql, connectionSchema, sourceOwners);
+        return sql;
     }
 
     private static boolean supportsSqlTableQualification(String datasourceType) {
