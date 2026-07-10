@@ -85,6 +85,8 @@ public class DataSyncParser {
     private static final String CONNECTION_TYPE_OVERRIDE_ENV = "INFA_FDL_CONNECTION_TYPE_OVERRIDES";
     private static final String CONNECTION_SCHEMA_OVERRIDE_PROPERTY = "infa.fdl.connection.schema.overrides";
     private static final String CONNECTION_SCHEMA_OVERRIDE_ENV = "INFA_FDL_CONNECTION_SCHEMA_OVERRIDES";
+    private static final String EMIT_GENERATED_WORK_PARAMS_PROPERTY = "infa.fdl.params.emit.generated.work";
+    private static final String EMIT_GENERATED_WORK_PARAMS_ENV = "INFA_FDL_PARAMS_EMIT_GENERATED_WORK";
     private static final String WORKLET_SPLIT_THRESHOLD_PROPERTY = "infa.fdl.worklet.split.task.threshold";
     private static final int DEFAULT_WORKLET_SPLIT_TASK_THRESHOLD = 8;
     private static final Map<String, String> CONNECTION_NAME_DATASOURCE_TYPE_OVERRIDES = new HashMap<String, String>();
@@ -215,7 +217,7 @@ public class DataSyncParser {
                 if (wlGroups == null) continue;
                 DataSyncParser.addMappingParamsForGroupSessions(doc, wlGroups, mappingParamsMap, resolvedMappings, wfParams);
             }
-            DataSyncParseNodeBean subTask = DataSyncParseNodeBean.create(folder, wfName).addGroups(nodes).addLinks(links).addParams(wfParams);
+            DataSyncParseNodeBean subTask = DataSyncParseNodeBean.create(folder, wfName).addGroups(nodes).addLinks(links).addParams(DataSyncParser.filterGeneratedWorkParams(wfParams));
             subTasks.add(subTask);
         }
         return subTasks;
@@ -366,7 +368,7 @@ public class DataSyncParser {
         params.addAll(DataSyncParser.parseWorkflowVariables(parameterResolver, workflowName, workletName));
         Set<String> resolvedMappings = new HashSet<String>();
         DataSyncParser.addMappingParamsForGroupSessions(doc, groups, mappingParamsMap, resolvedMappings, params);
-        return params;
+        return DataSyncParser.filterGeneratedWorkParams(params);
     }
 
     private static void addMappingParamsForGroupSessions(Document doc, List<GroupSQLInfo> groups,
@@ -5108,6 +5110,27 @@ public class DataSyncParser {
             .withValueType(DataSyncParser.mapDataType(declaration.getDataType()))
             .withDescription(description)
             .build();
+    }
+
+    private static List<ParamEntity> filterGeneratedWorkParams(List<ParamEntity> params) {
+        if (DataSyncParser.emitGeneratedWorkParams()) {
+            return params;
+        }
+        // Keep converted tasks compatible with FDL's native name-based global parameter lookup.
+        return new ArrayList<ParamEntity>();
+    }
+
+    private static boolean emitGeneratedWorkParams() {
+        String configured = System.getProperty(EMIT_GENERATED_WORK_PARAMS_PROPERTY);
+        if (!StringUtils.isNotEmpty(configured)) {
+            try {
+                configured = System.getenv(EMIT_GENERATED_WORK_PARAMS_ENV);
+            } catch (Throwable ignored) {
+                configured = "";
+            }
+        }
+        return StringUtils.isNotEmpty(configured)
+            && ("true".equalsIgnoreCase(configured.trim()) || "1".equals(configured.trim()));
     }
 
     private static String normalizeParamEntityName(String name) {

@@ -4,6 +4,7 @@
 The production Java logic must stay generic. This script uses WF_PRIP_Stage.XML
 only as a regression fixture for two generic contracts:
 - unresolved/empty Informatica SQL parameters remain FDL runtime placeholders;
+- converted tasks keep FDL native name-based global parameter lookup available;
 - executable Decision output links get an executable FDL display condition.
 """
 
@@ -39,6 +40,7 @@ LPDUTY_MAPPING_MARKER = 'NAME ="M_PRIP_Stage_LPDuty"'
 SQL_MARKER = 'TABLEATTRIBUTE NAME ="Sql Query" VALUE ="'
 WF_PRIP_DECISION_CONDITION = "$\u5224\u5b9a.Condition = true"
 PARAM_REF_RE = re.compile(r"\$\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}\s\"'<>]+\}")
+WORKFLOW_PARAM_REF_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 
 
 class RegressionError(Exception):
@@ -85,7 +87,8 @@ def fdl_placeholder(reference: str) -> str:
 
 
 def substitute_sql_runtime_params(sql: str) -> str:
-    return PARAM_REF_RE.sub(lambda match: fdl_placeholder(match.group(0)), sql)
+    rendered = PARAM_REF_RE.sub(lambda match: fdl_placeholder(match.group(0)), sql)
+    return WORKFLOW_PARAM_REF_RE.sub(lambda match: fdl_placeholder(match.group(0)), rendered)
 
 
 def assert_problem7_sql_contract(xml_path: Path) -> None:
@@ -98,6 +101,11 @@ def assert_problem7_sql_contract(xml_path: Path) -> None:
             raise RegressionError(f"runtime parameter placeholder missing from SQL: {expected}")
     if "trunc(NULL)" in rendered or "$$StartDate" in rendered or "$$EndDate" in rendered:
         raise RegressionError("SQL runtime parameter substitution regressed to NULL or raw Informatica tokens")
+    wf_text = read_xml_text(xml_path)
+    if "$MySqlStartDate" in wf_text:
+        rendered_workflow_param = substitute_sql_runtime_params("$MySqlStartDate and $MySqlEndDate")
+        if rendered_workflow_param != "${MySqlStartDate} and ${MySqlEndDate}":
+            raise RegressionError("single-$ workflow SQL parameters do not render as FDL placeholders")
 
 
 def assert_problem7_java_contract() -> None:
@@ -109,6 +117,9 @@ def assert_problem7_java_contract() -> None:
     required = (
         "sqlRuntimeParameterPlaceholder",
         "isSqlRuntimeParameterResolution",
+        "filterGeneratedWorkParams",
+        "emitGeneratedWorkParams",
+        "infa.fdl.params.emit.generated.work",
         'return "${" + name + "}";',
     )
     if legacy_null_branch in source:
@@ -135,7 +146,7 @@ def assert_problem8_java_contract() -> None:
     required = (
         "item.setConditionString(branch.getFdlConditionString())",
         "CLASSIFICATION_EXECUTABLE_DECISION_OUTPUT_BINDING.equals(this.analysis.getClassification())",
-        'return "true";',
+        'return "true = true";',
         "original Informatica condition",
     )
     for token in required:

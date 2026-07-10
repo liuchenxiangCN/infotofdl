@@ -542,7 +542,7 @@ extends DefaultSingleXMLNodeBean {
             if (CLASSIFICATION_EXECUTABLE_DECISION_OUTPUT_BINDING.equals(this.analysis.getClassification())
                 && STATUS_EXECUTABLE.equals(this.analysis.getStatus())
                 && this.analysis.getConditionEntity() != null) {
-                return "true";
+                return "true = true";
             }
             return this.condition;
         }
