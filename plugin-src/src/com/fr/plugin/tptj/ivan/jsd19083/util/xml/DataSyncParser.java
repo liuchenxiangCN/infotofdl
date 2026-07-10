@@ -1099,7 +1099,7 @@ public class DataSyncParser {
                         LogUtil.warn("buildWorkletGroups: [" + sessionRefName + "] targetTable empty, mappingRefName=" + mappingRefName);
                     }
                     if (!StringUtils.isNotEmpty(groupInfo.getTargetSchema()) && StringUtils.isNotEmpty(mappingRefName)) {
-                        DataSyncParser.extractTargetSchemaFromMapping(groupInfo, doc, mappingRefName);
+                        DataSyncParser.extractExplicitTargetSchemaFromMapping(groupInfo, doc, mappingRefName);
                     }
                     if (!foundSqlQuery && StringUtils.isNotEmpty(mappingRefName)) {
                         String sqlQuery = DataSyncParser.extractSqlQueryFromMapping(doc, mappingRefName);
@@ -1243,6 +1243,9 @@ public class DataSyncParser {
                     if (!StringUtils.isNotEmpty(groupInfo.getTargetTable()) && StringUtils.isNotEmpty(mappingRefName)) {
                         DataSyncParser.extractTargetInfoFromMapping(groupInfo, doc, mappingRefName);
                     }
+                    if (!StringUtils.isNotEmpty(groupInfo.getTargetSchema()) && StringUtils.isNotEmpty(mappingRefName)) {
+                        DataSyncParser.extractExplicitTargetSchemaFromMapping(groupInfo, doc, mappingRefName);
+                    }
                     if (!foundSqlQuery && StringUtils.isNotEmpty(mappingRefName)) {
                         String sqlQuery = DataSyncParser.extractSqlQueryFromMapping(doc, mappingRefName);
                         if (StringUtils.isNotEmpty(sqlQuery)) {
@@ -1366,7 +1369,7 @@ public class DataSyncParser {
                 DBNodeFromInfoBean fromInfo = DBNodeFromInfoBean.create().datasourceType(fromDBType).connectionName(fromDBName).sql(sqlQuery);
             DBNodeToInfoBean toInfo;
             try {
-                String targetSchema = DataSyncParser.firstNonEmpty(groupSQLInfo.getTargetSchema(), DataSyncParser.resolveSchema(toDBName, extraParam.getToDBName()));
+                String targetSchema = DataSyncParser.resolveTargetSchema(groupSQLInfo.getTargetSchema(), toDBName, toDBType);
                 toInfo = DBNodeToInfoBean.create().datasourceType(toDBType).connectionName(toDBName).tableName(targetTable).databaseName("").schema(targetSchema).targetWriteInfo(groupSQLInfo.getTargetWriteInfo());
                 toInfo.connectionMappingInfo(DataSyncParser.findConnectionMappingInfo(groupSQLInfo, "WRITER", toDBName));
             } catch (Exception e) {
@@ -3122,6 +3125,7 @@ public class DataSyncParser {
                 group.setGroupName(mappingName);
             }
             group.setName(mappingName);
+            DataSyncParser.extractExplicitTargetSchemaFromMapping(group, mappingEl.getOwnerDocument(), mappingName);
             NodeList transNodes = mappingEl.getElementsByTagName(TAG_TRANSFORMATION);
             for (int j = 0; j < transNodes.getLength(); ++j) {
                 Element transEl = (Element)transNodes.item(j);
@@ -3275,7 +3279,7 @@ public class DataSyncParser {
                 LogUtil.warn("Session [" + mappingName + "]: targetTable still empty, mappingRefName=" + mappingRefName + " (isNotEmpty=" + StringUtils.isNotEmpty(mappingRefName) + ")");
             }
             if (!StringUtils.isNotEmpty(group.getTargetSchema()) && StringUtils.isNotEmpty(mappingRefName)) {
-                DataSyncParser.extractTargetSchemaFromMapping(group, doc, mappingRefName);
+                DataSyncParser.extractExplicitTargetSchemaFromMapping(group, doc, mappingRefName);
             }
             if (!foundSqlQuery && StringUtils.isNotEmpty(mappingRefName)) {
                 String sqlQuery = DataSyncParser.extractSqlQueryFromMapping(doc, mappingRefName);
@@ -3406,22 +3410,15 @@ public class DataSyncParser {
                     LogUtil.info("extractTargetInfoFromMapping: resolved target table to " + finalName + " (physicalTable=" + physicalTable + ")");
                 }
             }
-            if ("SOURCE".equals(instType) && !StringUtils.isNotEmpty(group.getTargetSchema())) {
-                String sourceTransName = instEl.getAttribute("TRANSFORMATION_NAME");
-                if (StringUtils.isNotEmpty(sourceTransName)) {
-                    String schema = DataSyncParser.extractOwnerNameFromSource(doc, sourceTransName);
-                    if (StringUtils.isNotEmpty(schema)) {
-                        group.setTargetSchema(schema);
-                    }
-                }
-            }
         }
         if (!foundTarget) {
             LogUtil.warn("extractTargetInfoFromMapping: no TARGET INSTANCE found in MAPPING " + mappingEl.getAttribute(TAG_NAME));
+        } else if (!StringUtils.isNotEmpty(group.getTargetSchema())) {
+            DataSyncParser.extractExplicitTargetSchemaFromMapping(group, doc, mappingName);
         }
     }
 
-    private static void extractTargetSchemaFromMapping(GroupSQLInfo group, Document doc, String mappingName) {
+    private static void extractExplicitTargetSchemaFromMapping(GroupSQLInfo group, Document doc, String mappingName) {
         if (group == null || StringUtils.isNotEmpty(group.getTargetSchema())) {
             return;
         }
@@ -3429,23 +3426,54 @@ public class DataSyncParser {
         if (mappingEl == null) {
             return;
         }
+        TargetWriteInfo targetWriteInfo = group.getTargetWriteInfo();
+        String expectedTarget = DataSyncParser.firstNonEmpty(
+            targetWriteInfo == null ? "" : targetWriteInfo.getTargetInstance(),
+            targetWriteInfo == null ? "" : targetWriteInfo.getTargetDefinition(),
+            group.getTargetTable());
+        String unambiguousSchema = "";
+        boolean conflictingSchemas = false;
         NodeList instances = mappingEl.getElementsByTagName(TAG_INSTANCE);
         for (int j = 0; j < instances.getLength(); j++) {
             Element instEl = (Element) instances.item(j);
             String instType = instEl.getAttribute(TAG_TYPE);
-            if (!"TARGET".equals(instType) && !"SOURCE".equals(instType)) {
+            if (!"TARGET".equals(instType)) {
                 continue;
             }
             String transformationName = DataSyncParser.firstNonEmpty(instEl.getAttribute("TRANSFORMATION_NAME"), instEl.getAttribute(TAG_NAME));
-            String schema = "TARGET".equals(instType)
-                ? DataSyncParser.extractOwnerNameFromTarget(doc, transformationName)
-                : DataSyncParser.extractOwnerNameFromSource(doc, transformationName);
-            if (StringUtils.isNotEmpty(schema)) {
+            String schema = DataSyncParser.extractOwnerNameFromTarget(doc, transformationName);
+            if (!StringUtils.isNotEmpty(schema)) {
+                continue;
+            }
+            if (DataSyncParser.matchesExpectedTarget(doc, instEl, transformationName, expectedTarget)) {
                 group.setTargetSchema(schema);
-                LogUtil.info("extractTargetSchemaFromMapping: mapping=" + mappingName + ", schema=" + schema + ", source=" + instType + "/" + transformationName);
+                LogUtil.info("extractExplicitTargetSchemaFromMapping: mapping=" + mappingName + ", schema=" + schema + ", source=TARGET/" + transformationName);
                 return;
             }
+            if (!StringUtils.isNotEmpty(expectedTarget)) {
+                if (!StringUtils.isNotEmpty(unambiguousSchema)) {
+                    unambiguousSchema = schema;
+                } else if (!unambiguousSchema.equalsIgnoreCase(schema)) {
+                    conflictingSchemas = true;
+                }
+            }
         }
+        if (!StringUtils.isNotEmpty(expectedTarget) && StringUtils.isNotEmpty(unambiguousSchema) && !conflictingSchemas) {
+            group.setTargetSchema(unambiguousSchema);
+            LogUtil.info("extractExplicitTargetSchemaFromMapping: mapping=" + mappingName + ", schema=" + unambiguousSchema + ", source=unambiguous TARGET owner");
+        } else if (conflictingSchemas) {
+            LogUtil.warn("extractExplicitTargetSchemaFromMapping: conflicting TARGET owners for mapping=" + mappingName + ", falling back to writer connection schema");
+        }
+    }
+
+    private static boolean matchesExpectedTarget(Document doc, Element targetInstance, String transformationName, String expectedTarget) {
+        if (!StringUtils.isNotEmpty(expectedTarget)) {
+            return false;
+        }
+        String physicalTable = DataSyncParser.resolveTargetPhysicalName(doc, transformationName);
+        return DataSyncParser.equalsIgnoreCaseNonEmpty(expectedTarget, targetInstance.getAttribute(TAG_NAME))
+            || DataSyncParser.equalsIgnoreCaseNonEmpty(expectedTarget, transformationName)
+            || DataSyncParser.equalsIgnoreCaseNonEmpty(expectedTarget, physicalTable);
     }
 
     private static Element findMappingElement(Document doc, String mappingName) {
@@ -4937,20 +4965,49 @@ public class DataSyncParser {
             .toUpperCase();
     }
 
-    private static String resolveSchema(String toDBName, String extraToDBName) throws Exception {
-        if (StringUtils.isNotEmpty(extraToDBName)) {
-            String userName = FineUtils.getConnectionUserName(extraToDBName);
-            if (StringUtils.isNotEmpty(userName)) {
-                return userName.toUpperCase();
-            }
+    private static String resolveTargetSchema(String explicitTargetOwner, String toDBName, String toDBType) throws Exception {
+        String usableTargetOwner = WriterTargetSchemaPolicy.select(explicitTargetOwner, "", "");
+        if (StringUtils.isNotEmpty(usableTargetOwner)) {
+            return usableTargetOwner;
         }
+        String resolved = DataSyncParser.resolveSchema(toDBName, toDBType);
+        if (!StringUtils.isNotEmpty(resolved)) {
+            LogUtil.warn("resolveTargetSchema: no TARGET OWNERNAME or FDL writer schema for connection=" + toDBName);
+        }
+        return resolved;
+    }
+
+    private static String resolveSchema(String toDBName, String toDBType) throws Exception {
+        boolean oracle = "oracle".equalsIgnoreCase(toDBType);
         if (StringUtils.isNotEmpty(toDBName)) {
-            String userName = FineUtils.getConnectionUserName(toDBName);
-            if (StringUtils.isNotEmpty(userName)) {
-                return userName.toUpperCase();
+            String schema = DataSyncParser.resolveConnectionSchema(toDBName, oracle);
+            if (StringUtils.isNotEmpty(schema)) {
+                return schema;
             }
         }
         return "";
+    }
+
+    private static String resolveConnectionSchema(String connectionName, boolean oracle) throws Exception {
+        if (oracle) {
+            String userName = "";
+            try {
+                userName = FineUtils.getConnectionUserName(connectionName);
+                if (StringUtils.isNotEmpty(userName)) {
+                    userName = userName.toUpperCase();
+                }
+            } catch (Throwable ignored) {
+                LogUtil.warn("resolveConnectionSchema: Oracle connection user unavailable for connection=" + connectionName);
+            }
+            return WriterTargetSchemaPolicy.select("", userName, "");
+        }
+        String defaultSchema = "";
+        try {
+            defaultSchema = FineUtils.getDefaultSchema(connectionName);
+        } catch (Throwable ignored) {
+            LogUtil.warn("resolveConnectionSchema: FDL default schema unavailable for connection=" + connectionName);
+        }
+        return WriterTargetSchemaPolicy.select("", "", defaultSchema);
     }
 
     private static Map<String, List<ParamEntity>> parseAllMappingVariables(Document doc) {

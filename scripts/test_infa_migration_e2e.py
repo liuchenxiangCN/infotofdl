@@ -135,6 +135,8 @@ def positive_gates(xml_dir: Path) -> tuple[Gate, ...]:
             ("missing_connections=0", "PASS: all XML CONNECTIONNAME values"),
         ),
         Gate("workflow graph", ("python3", "scripts/test_infa_workflow_graph.py", str(wf_prip)), ("EXECUTABLE_TASK_STATUS_CONDITION", "EXECUTABLE_DECISION_OUTPUT_BINDING")),
+        Gate("target schema resolution", ("python3", "scripts/test_infa_target_schema_resolution.py", str(wf_prip)), ("SOURCE PRIP cannot override", "TARGET owner > Oracle writer user")),
+        Gate("field mapping types", ("python3", "scripts/test_infa_field_mapping_types.py"), ("generated field mapping type regression passed",)),
         Gate("dataflow status", ("python3", "scripts/test_infa_dataflow_status.py", "--xml-dir", str(xml_dir)), ("FDL_TRANSLATION_READY", "XML_SEMANTICS_PARSED_TRANSLATION_PENDING")),
         Gate("lookup/filter status", ("python3", "scripts/test_infa_lookup_filter_status.py", "--non-equality-not-executable", str(auditdb)), ("equality_executable_cases=3", "non_equality_plan_ready_cases=2")),
         Gate("adapter status", ("python3", "scripts/test_infa_adapter_status.py", "--runtime-validation-missing", str(wf_prip)), ("FDL_ADAPTER_REQUIRED", "FDL_ADAPTER_ROW_BINDING")),

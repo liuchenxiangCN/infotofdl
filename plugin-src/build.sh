@@ -4,7 +4,7 @@ set -e
 SRC_DIR="src"
 BUILD_DIR="build"
 PLUGIN_ID="com.fr.plugin.tptj.ivan.jsd19083"
-PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.2}"
+PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.5}"
 PLUGIN_NAME="fine-plugin-${PLUGIN_ID}-${PLUGIN_VERSION}"
 FDL_HOME="${FDL_HOME:-/mnt/d/FDL-tomcat-win64}"
 SOURCE_PLUGIN_VERSION="${SOURCE_PLUGIN_VERSION:-0.3.0}"
@@ -83,6 +83,7 @@ mkdir -p "$BUILD_DIR/classes"
 echo "Compiling core parsing files..."
 "$JAVAC" -encoding UTF-8 -cp "$CP" -d "$BUILD_DIR/classes" \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/GroupSQLInfo.java \
+  src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/WriterTargetSchemaPolicy.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/DataSyncParser.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/WorkFlowParser.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/XmlParserUtil.java \

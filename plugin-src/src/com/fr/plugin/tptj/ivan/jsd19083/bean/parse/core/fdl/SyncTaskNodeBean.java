@@ -104,10 +104,10 @@ extends DefaultSingleXMLNodeBean {
         result.setReader((ICoordinateDataFlowNode)this.getDBReaderNode());
         result.setWriter((ICoordinateDataFlowNode)this.getDBWriteNode());
         DBWriteNode dbWriteNode = (DBWriteNode)result.getWriter().getNodeContent();
-        List<FieldTransferBean> fieldTransferItems = this.createOfflineFieldTransferItems();
+        DBFieldTransferBean refresh = DBFieldTransferUtils.refreshWithoutError(result);
+        List<FieldTransferBean> fieldTransferItems = SyncTaskNodeBean.createFieldTransferItems(refresh, this.fieldLineageInfo);
         if (fieldTransferItems.isEmpty()) {
-            DBFieldTransferBean refresh = DBFieldTransferUtils.refreshWithoutError(result);
-            fieldTransferItems = SyncTaskNodeBean.createFieldTransferItems(refresh, this.fieldLineageInfo);
+            fieldTransferItems = this.createOfflineFieldTransferItems();
         }
         dbWriteNode.setFieldTransferItems(fieldTransferItems);
         FdlWriteConfigHelper.applyWriteConfig(dbWriteNode, fieldTransferItems, this.toInfo == null ? null : this.toInfo.getTargetWriteInfo());

@@ -3,7 +3,7 @@
     <id>com.fr.plugin.tptj.ivan.jsd19083</id>
     <name><![CDATA[FDL XML批量生成任务_EK]]></name>
     <active>yes</active>
-    <version>0.5.2</version>
+    <version>0.5.5</version>
     <group>fdl</group>
     <env-version>4.2.10.1</env-version>
     <vendor>Ivan.Guo</vendor>
@@ -25,6 +25,9 @@
           [2026-07-09]0.5.0: SQL表名按FDL连接Schema补全、SQL运行期参数保留FDL占位符、Decision分支生成可执行判断条件<br/>
           [2026-07-09]0.5.1: 默认不生成转换任务局部参数以保留FDL全局变量按名匹配、Decision分支条件改为显式比较表达式<br/>
           [2026-07-10]0.5.2: Source Qualifier SQL不再自动补Schema，保留XML原始表名写法<br/>
+          [2026-07-10]0.5.3: 目标写入模式优先使用Target OWNERNAME与FDL目标连接模式，不再用Source OWNERNAME覆盖目标模式<br/>
+          [2026-07-10]0.5.4: Oracle目标模式恢复0.3规则，使用目标连接用户名，不再使用可能返回ANONYMOUS的默认Schema<br/>
+          [2026-07-10]0.5.5: 生成字段映射时恢复0.3的元数据刷新顺序，自动带出来源与目标字段类型，无需手工重新获取<br/>
     ]]></change-notes>
     <main-package>com.fr.plugin.tptj.ivan.jsd19083</main-package>
     <lifecycle-monitor class="com.fr.plugin.tptj.ivan.jsd19083.LifecycleMonitorEK"/>
