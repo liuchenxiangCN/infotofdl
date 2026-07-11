@@ -104,7 +104,7 @@ def manual_qa_summary_text(xml_dir: Path, results: tuple[GateResult, ...]) -> st
         first_line = result.stdout.splitlines()[0] if result.stdout else "no-output"
         lines.append(f"- {result.name}: {first_line}")
     lines.append(
-        "PASS E2E positive gates: fixtures, preflight, workflow, dataflow, lookup/filter, adapter, params, report, save-route"
+        "PASS E2E positive gates: fixtures, preflight, workflow, native-condition, dataflow, lookup/filter, adapter, params, report, save-route"
     )
     return "\n".join(lines) + "\n"
 
@@ -135,6 +135,7 @@ def positive_gates(xml_dir: Path) -> tuple[Gate, ...]:
             ("missing_connections=0", "PASS: all XML CONNECTIONNAME values"),
         ),
         Gate("workflow graph", ("python3", "scripts/test_infa_workflow_graph.py", str(wf_prip)), ("EXECUTABLE_TASK_STATUS_CONDITION", "EXECUTABLE_DECISION_OUTPUT_BINDING")),
+        Gate("FDL native condition execution", ("bash", "scripts/test_fdl_native_conditions.sh"), ("PASS FDL native condition probe",)),
         Gate("target schema resolution", ("python3", "scripts/test_infa_target_schema_resolution.py", str(wf_prip)), ("SOURCE PRIP cannot override", "TARGET owner > Oracle writer user")),
         Gate("field mapping types", ("python3", "scripts/test_infa_field_mapping_types.py"), ("generated field mapping type regression passed",)),
         Gate("dataflow status", ("python3", "scripts/test_infa_dataflow_status.py", "--xml-dir", str(xml_dir)), ("FDL_TRANSLATION_READY", "XML_SEMANTICS_PARSED_TRANSLATION_PENDING")),
@@ -179,7 +180,7 @@ def run_positive(xml_dir: Path, manual_qa_artifacts: Path | None = None) -> int:
         print_pass(result, "positive")
     if manual_qa_artifacts is not None:
         write_manual_qa_artifacts(manual_qa_artifacts, xml_dir, tuple(results))
-    print("PASS E2E positive gates: fixtures, preflight, workflow, dataflow, lookup/filter, adapter, params, report, save-route")
+    print("PASS E2E positive gates: fixtures, preflight, workflow, native-condition, dataflow, lookup/filter, adapter, params, report, save-route")
     return 0
 
 

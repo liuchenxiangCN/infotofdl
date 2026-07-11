@@ -130,7 +130,7 @@ def assert_problem7_java_contract() -> None:
 
 
 def assert_problem8_decision_contract(xml_path: Path) -> None:
-    _decisions, conditional_links = audit_file(xml_path)
+    decisions, conditional_links = audit_file(xml_path)
     matches = [item for item in conditional_links if clean(item.condition) == WF_PRIP_DECISION_CONDITION]
     if len(matches) != 1:
         raise RegressionError(f"expected one decision condition link, actual={len(matches)}")
@@ -139,19 +139,40 @@ def assert_problem8_decision_contract(xml_path: Path) -> None:
         raise RegressionError(f"decision output link is not executable: {analysis.status}")
     if analysis.classification != CLASS_EXECUTABLE_DECISION_OUTPUT_BINDING:
         raise RegressionError(f"decision output link classification changed: {analysis.classification}")
+    decision_matches = [item for item in decisions if item.task_name == "\u5224\u5b9a"]
+    if len(decision_matches) != 1:
+        raise RegressionError(f"expected one Decision named \u5224\u5b9a, actual={len(decision_matches)}")
+    predicates = decision_matches[0].analysis.task_status_predicates
+    if len(predicates) != 11 or len({predicate.task_name for predicate in predicates}) != 11:
+        raise RegressionError(f"expected 11 distinct predecessor success predicates, actual={len(predicates)}")
+    if any(not predicate.executable or predicate.normalized_status != "SUCCEEDED" for predicate in predicates):
+        raise RegressionError("all 11 predecessor predicates must remain executable SUCCEEDED checks")
 
 
 def assert_problem8_java_contract() -> None:
     source = CONDITION_NODE_BEAN.read_text(encoding="utf-8")
     required = (
         "item.setConditionString(branch.getFdlConditionString())",
-        "CLASSIFICATION_EXECUTABLE_DECISION_OUTPUT_BINDING.equals(this.analysis.getClassification())",
-        'return "true = true";',
+        'new ConditionParamValue("${" + taskName + ".opresult}")',
+        'new ConditionParamValue("success")',
+        "ConditionCompareType.BELONGS",
+        "ConditionCompareType.NOT_BELONGS",
+        "expectedDecisionResult ? ConditionType.AND : ConditionType.OR",
+        "createNativeComparisonEntity(parsed)",
+        "ConditionCompareType.IS_TRUE",
+        "ConditionCompareType.IS_FALSE",
+        "return this.analysis.getConditionEntity().toString()",
         "original Informatica condition",
     )
     for token in required:
         if token not in source:
             raise RegressionError(f"ConditionNodeBean missing executable display condition token: {token}")
+    comparison_parse = source.find("ParsedCondition parsed = parseSimpleCondition(condition);")
+    bare_operand_parse = source.find("ParsedOperand bareOperand = parseOperand(trimmed, true);")
+    if comparison_parse < 0 or bare_operand_parse < 0 or comparison_parse > bare_operand_parse:
+        raise RegressionError(
+            "ConditionNodeBean must parse comparisons before treating the whole expression as a bare variable"
+        )
 
 
 def main(argv: list[str]) -> int:

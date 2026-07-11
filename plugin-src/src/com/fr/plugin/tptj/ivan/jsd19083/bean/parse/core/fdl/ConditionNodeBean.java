@@ -42,6 +42,7 @@ extends DefaultSingleXMLNodeBean {
     private final boolean nativeDecisionOutputExecutable;
     private final String nativeDecisionOutputName;
     private final String nativeDecisionOutputReason;
+    private final List<String> nativeDecisionSuccessTaskNames;
     private final List<ConditionBranch> branches = new ArrayList<ConditionBranch>();
 
     public ConditionNodeBean(int x, int y, String name, String id, String sourceDescription) {
@@ -50,11 +51,19 @@ extends DefaultSingleXMLNodeBean {
 
     public ConditionNodeBean(int x, int y, String name, String id, String sourceDescription,
         boolean nativeDecisionOutputExecutable, String nativeDecisionOutputName, String nativeDecisionOutputReason) {
+        this(x, y, name, id, sourceDescription, nativeDecisionOutputExecutable, nativeDecisionOutputName,
+            nativeDecisionOutputReason, new ArrayList<String>());
+    }
+
+    public ConditionNodeBean(int x, int y, String name, String id, String sourceDescription,
+        boolean nativeDecisionOutputExecutable, String nativeDecisionOutputName, String nativeDecisionOutputReason,
+        List<String> nativeDecisionSuccessTaskNames) {
         super(x, y, name, id);
         this.sourceDescription = sourceDescription == null ? "" : sourceDescription;
         this.nativeDecisionOutputExecutable = nativeDecisionOutputExecutable;
         this.nativeDecisionOutputName = nativeDecisionOutputName == null ? "" : nativeDecisionOutputName;
         this.nativeDecisionOutputReason = nativeDecisionOutputReason == null ? "" : nativeDecisionOutputReason;
+        this.nativeDecisionSuccessTaskNames = copyTaskNames(nativeDecisionSuccessTaskNames);
     }
 
     public void clearBranches() {
@@ -131,18 +140,41 @@ extends DefaultSingleXMLNodeBean {
         if (!StringUtils.isNotEmpty(condition)) {
             return ConditionAnalysis.visibleOnly("empty condition");
         }
-        String trimmed = condition.trim();
+        String trimmed = stripOuterParens(condition.trim());
+        if (startsWithWord(trimmed, 0, "NOT")) {
+            String operand = trimmed.substring("NOT".length()).trim();
+            if (!StringUtils.isNotEmpty(operand)) {
+                return ConditionAnalysis.unsupported("NOT condition is missing an operand");
+            }
+            return negateAnalysis(analyzeCondition(stripOuterParens(operand)));
+        }
         ConditionAnalysis logical = parseLogicalCondition(trimmed);
         if (logical != null) {
             return logical;
         }
         if ("true".equalsIgnoreCase(trimmed) || "false".equalsIgnoreCase(trimmed)) {
-            CompareConditionEntity entity = new CompareConditionEntity();
+            SelfConditionEntity entity = new SelfConditionEntity();
             entity.setSource(new ConditionParamValue("true"));
-            entity.setTarget(new ConditionParamValue(trimmed.toLowerCase()));
             entity.setValueType(ConditionValueType.BOOLEAN);
-            entity.setConditionCompareType(ConditionCompareType.EQUAL);
+            entity.setConditionCompareType("true".equalsIgnoreCase(trimmed)
+                ? ConditionCompareType.IS_TRUE
+                : ConditionCompareType.IS_FALSE);
             return ConditionAnalysis.executable(entity);
+        }
+        ParsedCondition parsed = parseSimpleCondition(condition);
+        if (parsed != null) {
+            DPConditionEntity entity = createNativeComparisonEntity(parsed);
+            ConditionAnalysis runtimeAnalysis = parsed.createRuntimeAnalysis(entity);
+            if (runtimeAnalysis != null) {
+                return runtimeAnalysis;
+            }
+            if (entity == null) {
+                return ConditionAnalysis.unsupported(parsed.nativeUnsupportedReason());
+            }
+            if (parsed.safeForFdlCondition()) {
+                return ConditionAnalysis.executable(entity);
+            }
+            return ConditionAnalysis.reviewRequired(entity, parsed.reviewReason());
         }
         ParsedOperand bareOperand = parseOperand(trimmed, true);
         if (bareOperand.variable && bareOperand.safeForFdlCondition()) {
@@ -162,23 +194,7 @@ extends DefaultSingleXMLNodeBean {
         if (bareOperand.variable) {
             return ConditionAnalysis.reviewRequired(bareOperand.reviewReason());
         }
-        ParsedCondition parsed = parseSimpleCondition(condition);
-        if (parsed == null) {
-            return ConditionAnalysis.unsupported("condition is not a structurally safe boolean/comparison expression");
-        }
-        CompareConditionEntity entity = new CompareConditionEntity();
-        entity.setSource(parsed.left.toConditionValue());
-        entity.setTarget(parsed.right.toConditionValue());
-        entity.setValueType(parsed.valueType);
-        entity.setConditionCompareType(parsed.compareType);
-        ConditionAnalysis runtimeAnalysis = parsed.createRuntimeAnalysis(entity);
-        if (runtimeAnalysis != null) {
-            return runtimeAnalysis;
-        }
-        if (parsed.safeForFdlCondition()) {
-            return ConditionAnalysis.executable(entity);
-        }
-        return ConditionAnalysis.reviewRequired(entity, parsed.reviewReason());
+        return ConditionAnalysis.unsupported("condition is not a structurally safe boolean/comparison expression");
     }
 
     public static boolean isNativeFdlLineConditionSupported(String condition, String fromTaskName) {
@@ -227,18 +243,186 @@ extends DefaultSingleXMLNodeBean {
         if (!nativeDecisionOutputName.equalsIgnoreCase(reference.getDecisionName())) {
             return analysis;
         }
-        if (!"=".equals(reference.getOperator()) && !"==".equals(reference.getOperator())) {
+        Boolean expectedDecisionResult = expectedDecisionResult(reference);
+        if (expectedDecisionResult == null) {
             return analysis;
         }
-        if (!"true".equalsIgnoreCase(reference.getExpectedValue())) {
+        DPConditionEntity entity = this.createNativeDecisionSuccessConditionEntity(expectedDecisionResult.booleanValue());
+        if (entity == null) {
             return analysis;
+        }
+        return ConditionAnalysis.executableDecisionOutput(entity, nativeDecisionOutputReason, reference);
+    }
+
+    private static Boolean expectedDecisionResult(DecisionOutputReference reference) {
+        if (reference == null) {
+            return null;
+        }
+        boolean equality = "=".equals(reference.getOperator()) || "==".equals(reference.getOperator());
+        boolean inequality = "!=".equals(reference.getOperator()) || "<>".equals(reference.getOperator());
+        if (!equality && !inequality) {
+            return null;
+        }
+        boolean expectedTrue;
+        if ("true".equalsIgnoreCase(reference.getExpectedValue())) {
+            expectedTrue = true;
+        } else if ("false".equalsIgnoreCase(reference.getExpectedValue())) {
+            expectedTrue = false;
+        } else {
+            return null;
+        }
+        return Boolean.valueOf(inequality ? !expectedTrue : expectedTrue);
+    }
+
+    private DPConditionEntity createNativeDecisionSuccessConditionEntity(boolean expectedDecisionResult) {
+        if (this.nativeDecisionSuccessTaskNames.isEmpty()) {
+            return null;
+        }
+        List<DPConditionEntity> conditions = new ArrayList<DPConditionEntity>();
+        for (String taskName : this.nativeDecisionSuccessTaskNames) {
+            CompareConditionEntity condition = new CompareConditionEntity();
+            condition.setSource(new ConditionParamValue("${" + taskName + ".opresult}"));
+            condition.setTarget(new ConditionParamValue("success"));
+            condition.setValueType(ConditionValueType.STRING);
+            condition.setConditionCompareType(expectedDecisionResult
+                ? ConditionCompareType.BELONGS
+                : ConditionCompareType.NOT_BELONGS);
+            conditions.add(condition);
+        }
+        if (conditions.size() == 1) {
+            return conditions.get(0);
+        }
+        AndOrConditionEntity result = new AndOrConditionEntity();
+        result.setConditionType(expectedDecisionResult ? ConditionType.AND : ConditionType.OR);
+        result.setConditions(conditions);
+        return result;
+    }
+
+    private static DPConditionEntity createNativeComparisonEntity(ParsedCondition parsed) {
+        if (parsed == null) {
+            return null;
+        }
+        if (parsed.isBooleanSelfCheck()) {
+            SelfConditionEntity entity = new SelfConditionEntity();
+            entity.setSource(parsed.left.toConditionValue());
+            entity.setValueType(ConditionValueType.BOOLEAN);
+            entity.setConditionCompareType(parsed.expectedTrue()
+                ? ConditionCompareType.IS_TRUE
+                : ConditionCompareType.IS_FALSE);
+            return entity;
+        }
+        ConditionCompareType nativeCompareType = parsed.nativeCompareType();
+        if (nativeCompareType == null) {
+            return null;
         }
         CompareConditionEntity entity = new CompareConditionEntity();
-        entity.setSource(new ConditionParamValue("true"));
-        entity.setTarget(new ConditionParamValue("true"));
-        entity.setValueType(ConditionValueType.BOOLEAN);
-        entity.setConditionCompareType(ConditionCompareType.EQUAL);
-        return ConditionAnalysis.executableDecisionOutput(entity, nativeDecisionOutputReason, reference);
+        entity.setSource(parsed.left.toConditionValue());
+        entity.setTarget(parsed.right.toConditionValue());
+        entity.setValueType(parsed.valueType);
+        entity.setConditionCompareType(nativeCompareType);
+        return entity;
+    }
+
+    private static ConditionAnalysis negateAnalysis(ConditionAnalysis analysis) {
+        if (analysis == null) {
+            return ConditionAnalysis.unsupported("NOT condition operand was not parsed");
+        }
+        DPConditionEntity entity = negateConditionEntity(analysis.getConditionEntity());
+        if (entity == null) {
+            String limitation = StringUtils.isNotEmpty(analysis.getLimitation())
+                ? analysis.getLimitation() + "; FDL has no safe native negation for this condition"
+                : "FDL has no safe native negation for this condition";
+            return ConditionAnalysis.unsupported(limitation,
+                analysis.getTaskStatusPredicates(), analysis.getDecisionOutputReferences(), analysis.getRequiredRuntimeBindings());
+        }
+        if (STATUS_EXECUTABLE.equals(analysis.getStatus())) {
+            return ConditionAnalysis.executable(entity);
+        }
+        return ConditionAnalysis.reviewRequired(entity, analysis.getLimitation(),
+            analysis.getTaskStatusPredicates(), analysis.getDecisionOutputReferences(), analysis.getRequiredRuntimeBindings());
+    }
+
+    private static DPConditionEntity negateConditionEntity(DPConditionEntity entity) {
+        if (entity instanceof AndOrConditionEntity) {
+            AndOrConditionEntity source = (AndOrConditionEntity) entity;
+            List<DPConditionEntity> children = new ArrayList<DPConditionEntity>();
+            for (DPConditionEntity child : source.getConditions()) {
+                DPConditionEntity negated = negateConditionEntity(child);
+                if (negated == null) {
+                    return null;
+                }
+                children.add(negated);
+            }
+            AndOrConditionEntity result = new AndOrConditionEntity();
+            result.setConditionType(source.getConditionType() == ConditionType.AND ? ConditionType.OR : ConditionType.AND);
+            result.setConditions(children);
+            return result;
+        }
+        if (entity instanceof CompareConditionEntity) {
+            CompareConditionEntity source = (CompareConditionEntity) entity;
+            ConditionCompareType inverse = inverseCompareType(source.getConditionCompareType());
+            if (inverse == null) {
+                return null;
+            }
+            CompareConditionEntity result = new CompareConditionEntity();
+            result.setSource(source.getSource());
+            result.setTarget(source.getTarget());
+            result.setValueType(source.getValueType());
+            result.setConditionCompareType(inverse);
+            return result;
+        }
+        if (entity instanceof SelfConditionEntity) {
+            SelfConditionEntity source = (SelfConditionEntity) entity;
+            ConditionCompareType inverse = inverseCompareType(source.getConditionCompareType());
+            if (inverse == null) {
+                return null;
+            }
+            SelfConditionEntity result = new SelfConditionEntity();
+            result.setSource(source.getSource());
+            result.setValueType(source.getValueType());
+            result.setConditionCompareType(inverse);
+            return result;
+        }
+        return null;
+    }
+
+    private static ConditionCompareType inverseCompareType(ConditionCompareType compareType) {
+        if (compareType == ConditionCompareType.EQUAL) return ConditionCompareType.NOT_EQUAL;
+        if (compareType == ConditionCompareType.NOT_EQUAL) return ConditionCompareType.EQUAL;
+        if (compareType == ConditionCompareType.BELONGS) return ConditionCompareType.NOT_BELONGS;
+        if (compareType == ConditionCompareType.NOT_BELONGS) return ConditionCompareType.BELONGS;
+        if (compareType == ConditionCompareType.CONTAINS) return ConditionCompareType.NOT_CONTAINS;
+        if (compareType == ConditionCompareType.NOT_CONTAINS) return ConditionCompareType.CONTAINS;
+        if (compareType == ConditionCompareType.STARTS_WITH) return ConditionCompareType.NOT_STARTS_WITH;
+        if (compareType == ConditionCompareType.NOT_STARTS_WITH) return ConditionCompareType.STARTS_WITH;
+        if (compareType == ConditionCompareType.ENDS_WITH) return ConditionCompareType.NOT_ENDS_WITH;
+        if (compareType == ConditionCompareType.NOT_ENDS_WITH) return ConditionCompareType.ENDS_WITH;
+        if (compareType == ConditionCompareType.IS_EMPTY) return ConditionCompareType.NOT_EMPTY;
+        if (compareType == ConditionCompareType.NOT_EMPTY) return ConditionCompareType.IS_EMPTY;
+        if (compareType == ConditionCompareType.GREATER) return ConditionCompareType.LESS_EQUAL;
+        if (compareType == ConditionCompareType.LESS) return ConditionCompareType.GREATER_EQUAL;
+        if (compareType == ConditionCompareType.GREATER_EQUAL) return ConditionCompareType.LESS;
+        if (compareType == ConditionCompareType.LESS_EQUAL) return ConditionCompareType.GREATER;
+        if (compareType == ConditionCompareType.IS_TRUE) return ConditionCompareType.IS_FALSE;
+        if (compareType == ConditionCompareType.IS_FALSE) return ConditionCompareType.IS_TRUE;
+        if (compareType == ConditionCompareType.BETWEEN) return ConditionCompareType.NOT_BETWEEN;
+        if (compareType == ConditionCompareType.NOT_BETWEEN) return ConditionCompareType.BETWEEN;
+        return null;
+    }
+
+    private static List<String> copyTaskNames(List<String> taskNames) {
+        List<String> result = new ArrayList<String>();
+        Set<String> seen = new LinkedHashSet<String>();
+        if (taskNames == null) {
+            return result;
+        }
+        for (String taskName : taskNames) {
+            String cleanName = taskName == null ? "" : taskName.trim();
+            if (StringUtils.isNotEmpty(cleanName) && seen.add(cleanName)) {
+                result.add(cleanName);
+            }
+        }
+        return result;
     }
 
     private static DPConditionEntity createConditionEntity(String condition) {
@@ -539,10 +723,9 @@ extends DefaultSingleXMLNodeBean {
         }
 
         String getFdlConditionString() {
-            if (CLASSIFICATION_EXECUTABLE_DECISION_OUTPUT_BINDING.equals(this.analysis.getClassification())
-                && STATUS_EXECUTABLE.equals(this.analysis.getStatus())
+            if (STATUS_EXECUTABLE.equals(this.analysis.getStatus())
                 && this.analysis.getConditionEntity() != null) {
-                return "true = true";
+                return this.analysis.getConditionEntity().toString();
             }
             return this.condition;
         }
@@ -592,6 +775,31 @@ extends DefaultSingleXMLNodeBean {
                 return !rightIsTrue;
             }
             return rightIsTrue;
+        }
+
+        ConditionCompareType nativeCompareType() {
+            if (this.valueType == ConditionValueType.STRING || this.valueType == ConditionValueType.NUMBER) {
+                if (this.compareType == ConditionCompareType.EQUAL) {
+                    return ConditionCompareType.BELONGS;
+                }
+                if (this.compareType == ConditionCompareType.NOT_EQUAL) {
+                    return ConditionCompareType.NOT_BELONGS;
+                }
+            }
+            if (this.valueType == ConditionValueType.NUMBER) {
+                if (this.compareType == ConditionCompareType.GREATER
+                    || this.compareType == ConditionCompareType.LESS
+                    || this.compareType == ConditionCompareType.GREATER_EQUAL
+                    || this.compareType == ConditionCompareType.LESS_EQUAL) {
+                    return this.compareType;
+                }
+            }
+            return null;
+        }
+
+        String nativeUnsupportedReason() {
+            return "FDL condition branch does not support operator " + this.operator
+                + " for inferred value type " + this.valueType;
         }
 
         boolean safeForFdlCondition() {

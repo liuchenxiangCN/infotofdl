@@ -596,7 +596,8 @@ public class DataSyncParser {
             DecisionConditionContext context = DataSyncParser.createDecisionConditionContext(containerElem, taskName, scopeName, links,
                 parameterResolver, parameterScope);
             DataSyncParser.addConditionNodeGroup(nodes, taskName, context.description, currentX, currentY,
-                context.nativeDecisionOutputExecutable, context.nativeDecisionOutputName, context.nativeDecisionOutputReason);
+                context.nativeDecisionOutputExecutable, context.nativeDecisionOutputName, context.nativeDecisionOutputReason,
+                context.nativeDecisionSuccessTaskNames);
             knownNames.add(taskName);
             conditionNodeNames.add(taskName);
         }
@@ -651,7 +652,8 @@ public class DataSyncParser {
             description.append("\nDecision native FDL gate status: ").append(ConditionNodeBean.STATUS_EXECUTABLE);
             description.append(" classification=").append(ConditionNodeBean.CLASSIFICATION_EXECUTABLE_TASK_STATUS_CONDITION);
             description.append(" - ").append(nativeReason);
-            return new DecisionConditionContext(description.toString(), true, taskName, nativeReason);
+            return new DecisionConditionContext(description.toString(), true, taskName, nativeReason,
+                DataSyncParser.getDecisionSuccessTaskNames(analysis));
         }
         if (!ConditionNodeBean.STATUS_EXECUTABLE.equals(analysis.getStatus())) {
             description.append("\nDecision adapter: review required before treating this as runnable-equivalent FDL branching.");
@@ -712,6 +714,22 @@ public class DataSyncParser {
             return "";
         }
         return "all Decision predicates are equality checks for upstream task succeeded status, all predicate tasks have direct empty incoming links, and the Decision TASKINSTANCE uses AND input semantics; FDL relations use ON_SUCCESS for those incoming links.";
+    }
+
+    private static List<String> getDecisionSuccessTaskNames(ConditionNodeBean.ConditionAnalysis analysis) {
+        List<String> result = new ArrayList<String>();
+        if (analysis == null) {
+            return result;
+        }
+        Set<String> seen = new LinkedHashSet<String>();
+        for (ConditionNodeBean.TaskStatusPredicate predicate : analysis.getTaskStatusPredicates()) {
+            String taskName = predicate.getTaskName();
+            String canonical = DataSyncParser.canonicalName(taskName);
+            if (StringUtils.isNotEmpty(taskName) && seen.add(canonical)) {
+                result.add(taskName);
+            }
+        }
+        return result;
     }
 
     private static Element findDirectTaskElement(Element containerElem, String taskName, String taskType) {
@@ -915,17 +933,17 @@ public class DataSyncParser {
     }
 
     private static void addConditionNodeGroup(List<GroupNodeInfoBean> nodes, String nodeName, String description, AtomicInteger currentX, AtomicInteger currentY) {
-        DataSyncParser.addConditionNodeGroup(nodes, nodeName, description, currentX, currentY, false, "", "");
+        DataSyncParser.addConditionNodeGroup(nodes, nodeName, description, currentX, currentY, false, "", "", new ArrayList<String>());
     }
 
     private static void addConditionNodeGroup(List<GroupNodeInfoBean> nodes, String nodeName, String description,
         AtomicInteger currentX, AtomicInteger currentY, boolean nativeDecisionOutputExecutable,
-        String nativeDecisionOutputName, String nativeDecisionOutputReason) {
+        String nativeDecisionOutputName, String nativeDecisionOutputReason, List<String> nativeDecisionSuccessTaskNames) {
         currentX.set(currentX.get() + NODE_GAP);
         currentY.set(currentY.get() + NODE_GAP);
         DefaultGroupNodeInfoBean group = new DefaultGroupNodeInfoBean(nodeName);
         group.addNode(new ConditionNodeBean(currentX.get(), currentY.get(), nodeName, UUID.randomUUID().toString(), description,
-            nativeDecisionOutputExecutable, nativeDecisionOutputName, nativeDecisionOutputReason));
+            nativeDecisionOutputExecutable, nativeDecisionOutputName, nativeDecisionOutputReason, nativeDecisionSuccessTaskNames));
         nodes.add(group);
     }
 
@@ -934,17 +952,21 @@ public class DataSyncParser {
         private final boolean nativeDecisionOutputExecutable;
         private final String nativeDecisionOutputName;
         private final String nativeDecisionOutputReason;
+        private final List<String> nativeDecisionSuccessTaskNames;
 
         DecisionConditionContext(String description) {
-            this(description, false, "", "");
+            this(description, false, "", "", new ArrayList<String>());
         }
 
         DecisionConditionContext(String description, boolean nativeDecisionOutputExecutable,
-            String nativeDecisionOutputName, String nativeDecisionOutputReason) {
+            String nativeDecisionOutputName, String nativeDecisionOutputReason, List<String> nativeDecisionSuccessTaskNames) {
             this.description = description == null ? "" : description;
             this.nativeDecisionOutputExecutable = nativeDecisionOutputExecutable;
             this.nativeDecisionOutputName = nativeDecisionOutputName == null ? "" : nativeDecisionOutputName;
             this.nativeDecisionOutputReason = nativeDecisionOutputReason == null ? "" : nativeDecisionOutputReason;
+            this.nativeDecisionSuccessTaskNames = nativeDecisionSuccessTaskNames == null
+                ? new ArrayList<String>()
+                : new ArrayList<String>(nativeDecisionSuccessTaskNames);
         }
     }
 
