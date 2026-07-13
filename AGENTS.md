@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件用于让新的 Codex/agent 对话快速恢复项目上下文。进入本仓库后，先读本文件，再读 `docs/project-handoff-2026-07-02.md` 和 `docs/migration-coverage-audit-2026-07-02.md`。
+本文件用于让新的 Codex/agent 对话快速恢复项目上下文。进入本仓库后，先读本文件。当前开发优先读 `docs/G13-user-test-fixes.md` 和 `docs/evidence/G13.1-user-test-baseline-2026-07-11.md`；`docs/project-handoff-2026-07-02.md` 和 `docs/migration-coverage-audit-2026-07-02.md` 是历史材料，不能替代当前源码、当前插件包、保存任务 DTO 和当前运行日志。
 
 ## 项目目标
 
@@ -62,6 +62,10 @@
 4. `auditdb.xml`: 多 Workflow、Filter、Lookup Procedure、ODBC。
 
 ## 当前判断
+
+2026-07-13 已纠正此前对条件分支的误判：FDL 4.2 调度器原生注入 `${任务名.opresult}`，取值为 `success`/`fail`；`0.5.5` 使用这些结果做 AND/OR 组合是正确机制，不得为此升级或改写为 `0.5.6`。本机活动插件已恢复为 `0.5.5`，保存任务 DTO、运行时字节码和回归测试证据见 `docs/evidence/G13.1-user-test-baseline-2026-07-11.md`。
+
+SOAP 请求问题保持独立待证，不得与已关闭的条件分支误报捆绑，也不得在没有 wire contract 和真实运行证据时宣称修复完成。
 
 当前插件可以作为通用转换器基础，但还没有覆盖所有 Informatica XML 功能语义到 FDL 的结构化翻译。主要 P0/P1 功能缺口：
 

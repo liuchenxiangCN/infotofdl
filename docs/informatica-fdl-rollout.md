@@ -12,6 +12,14 @@ This is not a promise that every customer XML will migrate by itself. The curren
 
 If a semantic can't be proven executable, it must stay visible in the migration report or generated task metadata. It must not be hidden as a silent success.
 
+## Current User-Test Follow-up
+
+The earlier proposal to replace `0.5.5` Decision conditions was withdrawn on 2026-07-13. FDL 4.2 natively injects `${taskName.opresult}` with `success`/`fail`, so composing predecessor results with AND/OR is the correct runtime mechanism. Do not create a `0.5.6` condition rewrite for this item.
+
+Read `docs/G13-user-test-fixes.md` before changing converter behavior. The corrected runtime, saved-task, and regression evidence is recorded in `docs/evidence/G13.1-user-test-baseline-2026-07-11.md`. The separately reported SOAP behavior still requires its own wire-contract evidence before any implementation or release claim.
+
+Do not use older status text in historical handoff documents as the source of truth for current `0.5.5` capability. Current source, package, saved FDL task DTOs, runtime implementation, and current logs take precedence.
+
 ## Scope Boundaries
 
 Users must create same-name FDL data connections before migration or import. The required FDL data connection name must match the Informatica `CONNECTIONNAME` value. Migration checks and records the names, but it doesn't create FDL data connections.
@@ -74,7 +82,7 @@ Stop when:
 
 ### Gate 3: E2E Validation Evidence
 
-Artifact: `.omo/evidence/task-11-informatica-fdl-migration.md`
+Artifact: current E2E output plus the applicable evidence record under `docs/evidence/`.
 
 Go when:
 
@@ -90,7 +98,7 @@ Stop when:
 
 ### Gate 4: Plugin Zip and Build Receipt
 
-Artifacts: `docs/build-and-ui-smoke-test.md` and `plugin-src/fine-plugin-com.fr.plugin.tptj.ivan.jsd19083-0.3.0.zip`
+Artifacts: `docs/build-and-ui-smoke-test.md`, the current plugin manifest, and `plugin-src/fine-plugin-com.fr.plugin.tptj.ivan.jsd19083-0.5.5.zip`.
 
 Go when:
 
