@@ -137,14 +137,12 @@ public class ApiSyncTaskNodeBean extends DefaultSingleXMLNodeBean {
         if (readColumns != null && !readColumns.isEmpty()) {
             List<FieldTransferBean> fieldTransferItems = new ArrayList<FieldTransferBean>();
             for (SqlFieldBean readCol : readColumns) {
-                SqlFieldBean writeCol = new SqlFieldBean();
                 String targetFieldName = fromInfo.getOutputFieldTarget(readCol.getName());
                 if (!StringUtils.isNotEmpty(targetFieldName)) {
                     targetFieldName = readCol.getName();
                 }
-                writeCol.setName(targetFieldName);
-                writeCol.setType(readCol.getType());
-                writeCol.setTypeName(readCol.getTypeName());
+                SqlFieldBean writeCol = FieldTransferFactory.createTargetField(this.fieldLineageInfo,
+                    this.toInfo == null ? null : this.toInfo.getTargetWriteInfo(), targetFieldName, readCol);
                 this.appendFieldComment(writeCol, this.getAdapterFieldMetadataForOutput(readCol.getName()));
                 fieldTransferItems.add(new FieldTransferBean(readCol, writeCol, false));
             }
@@ -314,10 +312,9 @@ public class ApiSyncTaskNodeBean extends DefaultSingleXMLNodeBean {
 
         List<SqlFieldBean> readColumns = new ArrayList<SqlFieldBean>();
         for (String fieldName : fromInfo.getOutputFields()) {
-            SqlFieldBean field = new SqlFieldBean();
-            field.setName(fieldName);
             String typeName = fromInfo.getOutputFieldType(fieldName);
-            field.setTypeName(StringUtils.isNotEmpty(typeName) ? typeName : "STRING");
+            SqlFieldBean field = FieldTransferFactory.createLogicalField(fieldName,
+                StringUtils.isNotEmpty(typeName) ? typeName : "string");
             this.appendFieldComment(field, this.getAdapterFieldMetadataForOutput(fieldName));
             readColumns.add(field);
         }
@@ -403,15 +400,11 @@ public class ApiSyncTaskNodeBean extends DefaultSingleXMLNodeBean {
     }
 
     private List<FieldTransferBean> createPostProjectionFieldTransferItems() {
-        List<FieldTransferBean> result = new ArrayList<FieldTransferBean>();
-        for (String fieldName : this.postTransformInfo.getOutputFields()) {
-            SqlFieldBean readColumn = new SqlFieldBean();
-            readColumn.setName(fieldName);
-            SqlFieldBean writeColumn = new SqlFieldBean();
-            writeColumn.setName(fieldName);
-            this.applyLineageComment(writeColumn);
-            this.appendFieldComment(writeColumn, this.getAdapterFieldMetadataForTarget(fieldName));
-            result.add(new FieldTransferBean(readColumn, writeColumn, false));
+        List<FieldTransferBean> result = FieldTransferFactory.createForTransform(this.fieldLineageInfo,
+            this.toInfo == null ? null : this.toInfo.getTargetWriteInfo(), this.postTransformInfo.getOutputFields());
+        for (FieldTransferBean item : result) {
+            this.applyLineageComment(item.getWriteColumn());
+            this.appendFieldComment(item.getWriteColumn(), this.getAdapterFieldMetadataForTarget(item.getWriteColumn().getName()));
         }
         return result;
     }

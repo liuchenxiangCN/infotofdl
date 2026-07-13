@@ -1,57 +1,37 @@
 #!/usr/bin/env python3
-"""Regression gate for generated FDL field mappings retaining DB field types."""
+"""Static companion gate for the executable JDK8 field-mapping probe."""
 
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SYNC_TASK = ROOT / "plugin-src/src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/SyncTaskNodeBean.java"
-
-
-def method_body(source: str, signature: str) -> str:
-    start = source.index(signature)
-    brace = source.index("{", start)
-    depth = 0
-    for index in range(brace, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[brace + 1:index]
-    raise AssertionError(f"unterminated method: {signature}")
+SRC = ROOT / "plugin-src/src/com/fr/plugin/tptj/ivan/jsd19083"
 
 
 def main() -> None:
-    source = SYNC_TASK.read_text(encoding="utf-8")
-    body = method_body(source, "public Component getFDLComponent()")
+    sync = (SRC / "bean/parse/core/fdl/SyncTaskNodeBean.java").read_text(encoding="utf-8")
+    transform = (SRC / "bean/parse/core/fdl/TransformSyncTaskNodeBean.java").read_text(encoding="utf-8")
+    api = (SRC / "bean/parse/core/fdl/ApiSyncTaskNodeBean.java").read_text(encoding="utf-8")
+    factory = (SRC / "bean/parse/core/fdl/FieldTransferFactory.java").read_text(encoding="utf-8")
+    parser = (SRC / "util/xml/DataSyncParser.java").read_text(encoding="utf-8")
 
-    refresh_call = "DBFieldTransferUtils.refreshWithoutError(result)"
-    typed_mapping = "SyncTaskNodeBean.createFieldTransferItems(refresh, this.fieldLineageInfo)"
-    offline_fallback = "fieldTransferItems = this.createOfflineFieldTransferItems()"
+    assert "FieldTransferFactory.createForSync" in sync
+    assert "createOfflineFieldTransferItems" not in sync
+    assert "FieldTransferFactory.createForTransform" in transform
+    assert "FieldTransferFactory.createForTransform" in api
+    assert "FieldTransferFactory.createTargetField" in api
+    assert "new FieldTransferBean(readColumn, writeColumn, false)" in factory
+    assert "typedXmlField(binding.getReadMeta()" in factory
+    assert "typedXmlField(binding.getWriteMeta()" in factory
+    assert "runtimeFallback.getType() == 0" in factory
+    assert "InfaSqlProjectionNormalizer.normalize" in parser
+    classifier = parser.split("private static boolean isExternalApiTransformation", 1)[1].split(
+        "private static ApiNodeFromInfoBean createApiConfigFromTransformation", 1
+    )[0]
+    assert '"Lookup Procedure".equalsIgnoreCase(type)' in classifier
+    assert 'lower.contains("procedure")' not in classifier
 
-    for fragment in (refresh_call, typed_mapping, offline_fallback):
-        assert fragment in body, f"missing generated mapping step: {fragment}"
-
-    assert body.index(refresh_call) < body.index(typed_mapping), (
-        "FDL metadata refresh must run before constructing field-transfer items"
-    )
-    assert body.index(typed_mapping) < body.index(offline_fallback), (
-        "name-only offline mappings must be a fallback, not the primary generated mapping"
-    )
-    assert "if (fieldTransferItems.isEmpty())" in body, (
-        "offline mapping may only be used when runtime metadata refresh yields no mapping"
-    )
-
-    typed_factory = method_body(
-        source,
-        "private static List<FieldTransferBean> createFieldTransferItems(",
-    )
-    assert "List<SqlFieldBean> origin = refresh.getOrigin()" in typed_factory
-    assert "List<SqlFieldBean> target = refresh.getTarget()" in typed_factory
-    assert "new FieldTransferBean(originFieldBean, targetFieldBean, false)" in typed_factory
-
-    print("generated field mapping type regression passed")
+    print("PASS static typed field mapping gate; run scripts/test_infa_field_mapping_types.sh for DTO assertions")
 
 
 if __name__ == "__main__":

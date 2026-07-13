@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FDL_HOME="${FDL_HOME:-/mnt/d/FDL-tomcat-win64}"
-PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.5}"
+PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.6}"
 PLUGIN_ID="com.fr.plugin.tptj.ivan.jsd19083"
 PLUGIN_NAME="fine-plugin-${PLUGIN_ID}-${PLUGIN_VERSION}"
 PLUGIN_ZIP="$REPO_ROOT/plugin-src/${PLUGIN_NAME}.zip"
