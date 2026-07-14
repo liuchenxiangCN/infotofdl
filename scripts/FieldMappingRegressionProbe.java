@@ -23,7 +23,7 @@ import org.w3c.dom.NodeList;
 public class FieldMappingRegressionProbe {
     public static void main(String[] args) throws Exception {
         assertTypeMappings();
-        assertTypedFactoryIgnoresRuntimeConflict();
+        assertTypedFactoryUsesXmlReadAndRuntimeTargetMetadata();
         assertRuntimeEnrichesOnlyMissingXmlMetadata();
         assertSqlProjectionNormalization();
         if (args.length > 0) {
@@ -45,7 +45,7 @@ public class FieldMappingRegressionProbe {
             "unknown Informatica type must be explicit OTHER, not type=0/string");
     }
 
-    private static void assertTypedFactoryIgnoresRuntimeConflict() {
+    private static void assertTypedFactoryUsesXmlReadAndRuntimeTargetMetadata() {
         FieldLineageInfo lineage = new FieldLineageInfo();
         MappingFieldBinding binding = binding("target_a", "AMOUNT", "AMOUNT_EXPR",
             meta("AMOUNT_EXPR", InfaFieldMeta.KIND_TRANSFORM, "decimal", 18, 4),
@@ -63,13 +63,18 @@ public class FieldMappingRegressionProbe {
         runtimeWrite.setName("AMOUNT");
         runtimeWrite.setType(Types.CHAR);
         runtimeWrite.setTypeName("CHAR");
+        runtimeWrite.setDialectTypeName("char(22)");
+        runtimeWrite.setComment("live target comment");
         runtime.setOrigin(Arrays.asList(runtimeRead));
         runtime.setTarget(Arrays.asList(runtimeWrite));
 
         List<FieldTransferBean> items = FieldTransferFactory.createForSync(runtime, lineage, target);
         require(items.size() == 1, "connector-proven field binding missing");
         require(items.get(0).getReadColumn().getType() == Types.DECIMAL, "runtime preview replaced XML read type");
-        require(items.get(0).getWriteColumn().getType() == Types.NUMERIC, "runtime preview replaced XML target type");
+        require(items.get(0).getWriteColumn().getType() == Types.CHAR
+            && "char(22)".equals(items.get(0).getWriteColumn().getDialectTypeName())
+            && "live target comment".equals(items.get(0).getWriteColumn().getComment()),
+            "live target type/comment metadata was replaced by stale XML metadata");
         String json = JsonUtil.toJsonString(items);
         require(json.contains("AMOUNT_EXPR") && json.contains("AMOUNT") && !json.contains("\"type\":0"),
             "serialized field transfer lost names or types: " + json);
@@ -102,8 +107,21 @@ public class FieldMappingRegressionProbe {
         String normalized = InfaSqlProjectionNormalizer.normalize(original, literal);
         require(normalized.contains("a AS A") && normalized.contains("0.0000 AS TAXRATE")
             && normalized.contains("substr(code,1,4) AS T2_CODE"), "literal/expression aliases not normalized: " + normalized);
+        require("select a AS A, 0.0000 AS TAXRATE, substr(code,1,4) AS T2_CODE from t".equals(normalized),
+            "projection rewrite removed SELECT/FROM token separators: " + normalized);
         require(original.equals(literal.getOriginalSql()) && normalized.equals(literal.getEffectiveSql()),
             "original/effective SQL provenance was not retained");
+
+        FieldLineageInfo multiline = projection("A", "B");
+        String multilineSql = InfaSqlProjectionNormalizer.normalize("select\n  a, b\nfrom t", multiline);
+        require(multilineSql.startsWith("select\n") && multilineSql.contains("b AS B\nfrom t"),
+            "projection rewrite did not preserve SQL boundary whitespace: " + multilineSql);
+
+        FieldLineageInfo keywordInIdentifier = projection("selected_from_value");
+        String identifierSql = InfaSqlProjectionNormalizer.normalize(
+            "select selected_from_value from from_archive", keywordInIdentifier);
+        require("select selected_from_value AS selected_from_value from from_archive".equals(identifierSql),
+            "SELECT/FROM text inside identifiers was treated as a keyword: " + identifierSql);
 
         FieldLineageInfo duplicate = projection("COMCODE", "MANAGECOM");
         String union = InfaSqlProjectionNormalizer.normalize(
@@ -154,6 +172,12 @@ public class FieldMappingRegressionProbe {
         require(InfaSqlProjectionNormalizer.PREFIX_PROVEN.equals(suffix.getSqlProjectionStatus())
             && !suffix.isReaderFieldAvailable("COINCIDE_TRAINCODE"),
             "issue 10 unresolved SQL suffix was silently promoted");
+
+        FieldLineageInfo trainOvertime = extract(doc, "MP_STAGE_TRAIN_ENTER_OVERTIME");
+        String trainOvertimeSql = InfaSqlProjectionNormalizer.normalize(
+            mappingSql(doc, "MP_STAGE_TRAIN_ENTER_OVERTIME"), trainOvertime);
+        require(trainOvertimeSql.startsWith("select ") && trainOvertimeSql.contains(" AS COMCODE\r\n  from "),
+            "real train-overtime SQL lost SELECT/FROM boundary whitespace: " + trainOvertimeSql);
 
         int proven = 0;
         for (MappingFieldBinding binding : issue13.getFieldBindings(null)) {

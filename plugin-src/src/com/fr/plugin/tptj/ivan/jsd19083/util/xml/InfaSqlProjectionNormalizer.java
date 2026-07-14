@@ -68,12 +68,24 @@ public final class InfaSqlProjectionNormalizer {
     private static String rewriteProjection(String branch, SelectProjection projection, List<InfaFieldMeta> fields) {
         StringBuilder rewritten = new StringBuilder();
         rewritten.append(branch.substring(0, projection.start));
+        String originalProjection = branch.substring(projection.start, projection.end);
+        rewritten.append(edgeWhitespace(originalProjection, true));
         for (int i = 0; i < projection.items.size(); i++) {
             if (i > 0) rewritten.append(", ");
             rewritten.append(stripAlias(projection.items.get(i))).append(" AS ").append(sqlIdentifier(fields.get(i).getFieldName()));
         }
+        rewritten.append(edgeWhitespace(originalProjection, false));
         rewritten.append(branch.substring(projection.end));
         return rewritten.toString();
+    }
+
+    private static String edgeWhitespace(String value, boolean leading) {
+        int index = leading ? 0 : value.length() - 1;
+        while (index >= 0 && index < value.length() && Character.isWhitespace(value.charAt(index))) {
+            index += leading ? 1 : -1;
+        }
+        String whitespace = leading ? value.substring(0, index) : value.substring(index + 1);
+        return whitespace.length() > 0 ? whitespace : " ";
     }
 
     private static SelectProjection parseProjection(String sql) {

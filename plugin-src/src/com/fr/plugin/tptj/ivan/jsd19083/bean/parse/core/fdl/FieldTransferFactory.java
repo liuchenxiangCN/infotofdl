@@ -83,7 +83,7 @@ public final class FieldTransferFactory {
             SqlFieldBean runtimeRead = runtime == null ? null : findByName(runtime.getOrigin(), binding.getReadField());
             SqlFieldBean runtimeWrite = runtime == null ? null : findByName(runtime.getTarget(), binding.getTargetField());
             SqlFieldBean readColumn = typedXmlField(binding.getReadMeta(), readName, runtimeRead);
-            SqlFieldBean writeColumn = typedXmlField(binding.getWriteMeta(), binding.getTargetField(), runtimeWrite);
+            SqlFieldBean writeColumn = targetField(binding.getWriteMeta(), binding.getTargetField(), runtimeWrite);
             if (readColumn == null || writeColumn == null || readColumn.getType() == 0 || writeColumn.getType() == 0) {
                 continue;
             }
@@ -142,6 +142,17 @@ public final class FieldTransferFactory {
             return null;
         }
         return copy(runtimeFallback, name);
+    }
+
+    private static SqlFieldBean targetField(InfaFieldMeta xmlMeta, String name, SqlFieldBean runtimeTarget) {
+        // The connector/XML decides which target field is mapped, while the
+        // live writer preview is authoritative for physical target metadata.
+        // Keeping its exact type, dialect type and comment prevents FDL from
+        // reporting a freshly generated task as having a changed table schema.
+        if (runtimeTarget != null && runtimeTarget.getType() != 0) {
+            return copy(runtimeTarget, name);
+        }
+        return typedXmlField(xmlMeta, name, null);
     }
 
     private static SqlFieldBean copy(SqlFieldBean source, String name) {
