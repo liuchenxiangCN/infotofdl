@@ -27,6 +27,8 @@ import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.ExpressionFieldIn
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.FieldLineageInfo;
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.FilterFieldInfo;
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.LookupFieldInfo;
+import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.InfaFieldMeta;
+import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.MappingFieldBinding;
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.fdl.db.TargetWriteInfo;
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.group.DefaultGroupNodeInfoBean;
 import com.fr.plugin.tptj.ivan.jsd19083.bean.parse.core.group.GroupNodeInfoBean;
@@ -1374,6 +1376,7 @@ public class DataSyncParser {
             }
             String sqlQuery = !sqlQueryList.isEmpty() ? String.join((CharSequence)" union all ", sqlQueryList) : "";
             sqlQuery = DataSyncParser.qualifyReaderSqlTableReferences(doc, groupSQLInfo, sqlQuery, fromDBName, fromDBType);
+            sqlQuery = InfaSqlProjectionNormalizer.normalize(sqlQuery, groupSQLInfo.getFieldLineageInfo());
             DataFlowTransformInfo dataFlowTransformInfo = null;
             DataFlowTransformInfo apiPostProjectionTransformInfo = null;
             if (groupSQLInfo.getApiConfig() == null) {
@@ -1414,7 +1417,7 @@ public class DataSyncParser {
                             groupSQLInfo.getApiConfig(), toInfo, fromInfo, groupSQLInfo.getFieldLineageInfo(), apiPostProjectionTransformInfo));
                     } else {
                         group.addNode(new ApiSyncTaskNodeBean(currentX.get(), currentY.get(), name + "_query", UUID.randomUUID().toString(),
-                            groupSQLInfo.getApiConfig(), toInfo));
+                            groupSQLInfo.getApiConfig(), toInfo, null, groupSQLInfo.getFieldLineageInfo(), null));
                     }
                 } else if (groupSQLInfo.getApiConfig().isFdlRowApiUdfSupported()
                     && apiPostProjectionTransformInfo != null && apiPostProjectionTransformInfo.isExecutable()) {
@@ -3826,6 +3829,7 @@ public class DataSyncParser {
         }
         FieldLineageContext context = new FieldLineageContext(mappingEl);
         FieldLineageInfo info = new FieldLineageInfo();
+        context.addReaderProjectionFields(info);
         NodeList instances = mappingEl.getElementsByTagName(TAG_INSTANCE);
         for (int i = 0; i < instances.getLength(); i++) {
             Element instEl = (Element) instances.item(i);
@@ -3852,6 +3856,7 @@ public class DataSyncParser {
                 for (String candidate : candidates) {
                     info.addReadCandidate(targetField, candidate);
                 }
+                String preferredReadAlias = "";
                 for (ExpressionFieldInfo expressionInfo : context.collectExpressionInfos(targetNode, new HashSet<String>(), 0)) {
                     expressionInfo.setMappingName(mappingEl.getAttribute(TAG_NAME));
                     expressionInfo.setTargetInstance(targetInstance);
@@ -3859,6 +3864,9 @@ public class DataSyncParser {
                     info.addExpressionInfo(expressionInfo);
                     if (expressionInfo.isSqlPushdownSupported()) {
                         info.addReadCandidate(targetField, expressionInfo.getReadAlias());
+                        if (!StringUtils.isNotEmpty(preferredReadAlias)) {
+                            preferredReadAlias = expressionInfo.getReadAlias();
+                        }
                     }
                 }
                 for (FilterFieldInfo filterInfo : context.collectFilterInfos(targetNode, new HashSet<String>(), 0)) {
@@ -3871,6 +3879,52 @@ public class DataSyncParser {
                     lookupInfo.addOutputTargetField(context.findLookupOutputForTarget(targetNode, lookupInfo.getTransformationName()), targetField);
                     info.addLookupInfo(lookupInfo);
                 }
+                MappingFieldBinding binding = new MappingFieldBinding();
+                binding.setMappingName(mappingEl.getAttribute(TAG_NAME));
+                binding.setTargetInstance(targetInstance);
+                binding.setTargetDefinition(targetDefinition);
+                binding.setTargetField(targetField);
+                InfaFieldMeta writeMeta = DataSyncParser.findDefinitionFieldMeta(doc, "TARGET", "TARGETFIELD",
+                    targetDefinition, targetInstance, targetField, InfaFieldMeta.KIND_TARGET);
+                binding.setWriteMeta(writeMeta);
+                binding.setTargetOrdinal(writeMeta == null ? 0 : writeMeta.getOrdinal());
+                List<LineageNode> producers = context.getIncomingSources(targetNode);
+                if (producers.size() == 1) {
+                    LineageNode producer = producers.get(0);
+                    InfaFieldMeta readMeta = context.getFieldMeta(producer, doc);
+                    String readField = preferredReadAlias;
+                    if (!StringUtils.isNotEmpty(readField) && !candidates.isEmpty()) {
+                        readField = candidates.iterator().next();
+                    }
+                    if (!StringUtils.isNotEmpty(readField)
+                        && ("Source Qualifier".equals(producer.instanceType) || "Source Definition".equals(producer.instanceType))) {
+                        readField = producer.field;
+                    }
+                    binding.setProducerInstance(producer.instance);
+                    binding.setProducerType(producer.instanceType);
+                    binding.setProducerOrdinal(readMeta == null ? 0 : readMeta.getOrdinal());
+                    binding.setReadField(readField);
+                    binding.setReadMeta(readMeta);
+                    if (!StringUtils.isNotEmpty(readField)) {
+                        binding.setStatus(MappingFieldBinding.UNRESOLVED);
+                        binding.setLimitation("Connector exists but the reader output alias is unresolved.");
+                    } else if (readMeta == null || writeMeta == null
+                        || !StringUtils.isNotEmpty(readMeta.getDataType()) || !StringUtils.isNotEmpty(writeMeta.getDataType())) {
+                        binding.setStatus(MappingFieldBinding.RUNTIME_REQUIRED);
+                        binding.setLimitation("Connector identity is proven, but missing XML field metadata requires runtime enrichment.");
+                    } else if (!readMeta.isTypeProven() || !writeMeta.isTypeProven()) {
+                        binding.setStatus(MappingFieldBinding.UNSUPPORTED);
+                        binding.setLimitation("Informatica field type is not mapped to an FDL JDBC type.");
+                    } else {
+                        binding.setStatus(MappingFieldBinding.PROVEN);
+                    }
+                } else {
+                    binding.setStatus(MappingFieldBinding.UNRESOLVED);
+                    binding.setLimitation(producers.isEmpty()
+                        ? "Target field has no incoming Mapping connector."
+                        : "Target field has multiple incoming Mapping connectors.");
+                }
+                info.addFieldBinding(binding);
             }
         }
         return info;
@@ -3900,6 +3954,70 @@ public class DataSyncParser {
         return result;
     }
 
+    private static InfaFieldMeta findDefinitionFieldMeta(Document doc, String definitionTag, String fieldTag,
+                                                          String definitionName, String instanceName, String fieldName,
+                                                          String fieldKind) {
+        if (doc == null || !StringUtils.isNotEmpty(fieldName)) {
+            return null;
+        }
+        String expectedDefinition = StringUtils.isNotEmpty(definitionName) ? definitionName : instanceName;
+        NodeList definitions = doc.getElementsByTagName(definitionTag);
+        for (int i = 0; i < definitions.getLength(); i++) {
+            Element definition = (Element)definitions.item(i);
+            if (StringUtils.isNotEmpty(expectedDefinition)
+                && !expectedDefinition.equals(definition.getAttribute(TAG_NAME))) {
+                continue;
+            }
+            NodeList fields = definition.getElementsByTagName(fieldTag);
+            for (int j = 0; j < fields.getLength(); j++) {
+                Element field = (Element)fields.item(j);
+                if (fieldName.equals(field.getAttribute(TAG_NAME))) {
+                    return DataSyncParser.createFieldMeta(field, instanceName, fieldKind, j + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static InfaFieldMeta createFieldMeta(Element field, String instanceName, String fieldKind, int fallbackOrdinal) {
+        if (field == null) {
+            return null;
+        }
+        InfaFieldMeta meta = new InfaFieldMeta();
+        meta.setInstanceName(instanceName);
+        meta.setFieldName(field.getAttribute(TAG_NAME));
+        meta.setFieldKind(fieldKind);
+        meta.setOrdinal(DataSyncParser.parseNonNegativeInt(field.getAttribute("FIELDNUMBER"), fallbackOrdinal));
+        meta.setDataType(field.getAttribute("DATATYPE"));
+        meta.setPrecision(DataSyncParser.parseNonNegativeInt(field.getAttribute("PRECISION"), 0));
+        meta.setScale(DataSyncParser.parseNonNegativeInt(field.getAttribute("SCALE"), 0));
+        meta.setNullable(!"NOTNULL".equalsIgnoreCase(field.getAttribute("NULLABLE")));
+        meta.setPrimaryKey("PRIMARY KEY".equalsIgnoreCase(field.getAttribute("KEYTYPE")));
+        return meta;
+    }
+
+    private static int childFieldOrdinal(Element parent, String fieldTag, String fieldName) {
+        if (parent == null) {
+            return 0;
+        }
+        NodeList fields = parent.getElementsByTagName(fieldTag);
+        for (int i = 0; i < fields.getLength(); i++) {
+            Element field = (Element)fields.item(i);
+            if (fieldName.equals(field.getAttribute(TAG_NAME))) {
+                return DataSyncParser.parseNonNegativeInt(field.getAttribute("FIELDNUMBER"), i + 1);
+            }
+        }
+        return 0;
+    }
+
+    private static int parseNonNegativeInt(String value, int fallback) {
+        try {
+            return Math.max(Integer.parseInt(value == null ? "" : value.trim()), 0);
+        } catch (Exception ignored) {
+            return Math.max(fallback, 0);
+        }
+    }
+
     private static class FieldLineageContext {
         private final Map<String, String> instanceTypes = new HashMap<String, String>();
         private final Map<String, String> instanceTransformations = new HashMap<String, String>();
@@ -3907,6 +4025,7 @@ public class DataSyncParser {
         private final Map<String, Element> transformationElements = new HashMap<String, Element>();
         private final Map<String, Map<String, Element>> transformFields = new HashMap<String, Map<String, Element>>();
         private final Map<String, Set<String>> targetFields = new HashMap<String, Set<String>>();
+        private final Map<String, LinkedHashSet<String>> connectedReaderFields = new LinkedHashMap<String, LinkedHashSet<String>>();
 
         FieldLineageContext(Element mappingEl) {
             NodeList transformations = mappingEl.getElementsByTagName(TAG_TRANSFORMATION);
@@ -3970,6 +4089,14 @@ public class DataSyncParser {
                     incoming.put(to.key(), edges);
                 }
                 edges.add(new LineageEdge(from, to));
+                if ("Source Qualifier".equals(from.instanceType)) {
+                    LinkedHashSet<String> fields = connectedReaderFields.get(from.instance);
+                    if (fields == null) {
+                        fields = new LinkedHashSet<String>();
+                        connectedReaderFields.put(from.instance, fields);
+                    }
+                    fields.add(from.field);
+                }
                 if ("Target Definition".equals(to.instanceType)) {
                     Set<String> fields = targetFields.get(to.instance);
                     if (fields == null) {
@@ -3987,6 +4114,61 @@ public class DataSyncParser {
                 return new LinkedHashSet<String>();
             }
             return fields;
+        }
+
+        void addReaderProjectionFields(FieldLineageInfo info) {
+            for (Map.Entry<String, LinkedHashSet<String>> entry : connectedReaderFields.entrySet()) {
+                String instance = entry.getKey();
+                String transformationName = instanceTransformations.get(instance);
+                if (!StringUtils.isNotEmpty(transformationName)) {
+                    transformationName = instance;
+                }
+                Element transformation = transformationElements.get(transformationName);
+                if (transformation == null) {
+                    continue;
+                }
+                NodeList fields = transformation.getElementsByTagName("TRANSFORMFIELD");
+                int ordinal = 0;
+                for (int i = 0; i < fields.getLength(); i++) {
+                    Element field = (Element)fields.item(i);
+                    String fieldName = field.getAttribute(TAG_NAME);
+                    if (!entry.getValue().contains(fieldName)) {
+                        continue;
+                    }
+                    InfaFieldMeta meta = DataSyncParser.createFieldMeta(field, instance,
+                        InfaFieldMeta.KIND_TRANSFORM, ++ordinal);
+                    info.addReaderProjectionField(instance, meta);
+                }
+            }
+        }
+
+        List<LineageNode> getIncomingSources(LineageNode node) {
+            List<LineageNode> result = new ArrayList<LineageNode>();
+            List<LineageEdge> edges = node == null ? null : incoming.get(node.key());
+            if (edges != null) {
+                for (LineageEdge edge : edges) {
+                    result.add(edge.from);
+                }
+            }
+            return result;
+        }
+
+        InfaFieldMeta getFieldMeta(LineageNode node, Document doc) {
+            if (node == null) {
+                return null;
+            }
+            if ("Source Definition".equals(node.instanceType)) {
+                String definition = instanceTransformations.get(node.instance);
+                return DataSyncParser.findDefinitionFieldMeta(doc, "SOURCE", "SOURCEFIELD", definition,
+                    node.instance, node.field, InfaFieldMeta.KIND_SOURCE);
+            }
+            Element field = getTransformField(node);
+            if (field == null) {
+                return null;
+            }
+            Element transformation = getTransformationElement(node);
+            int ordinal = DataSyncParser.childFieldOrdinal(transformation, "TRANSFORMFIELD", node.field);
+            return DataSyncParser.createFieldMeta(field, node.instance, InfaFieldMeta.KIND_TRANSFORM, ordinal);
         }
 
         List<ExpressionFieldInfo> collectExpressionInfos(LineageNode node, Set<String> visited, int depth) {
@@ -5805,6 +5987,9 @@ public class DataSyncParser {
 
     private static boolean isExternalApiTransformation(Element transEl) {
         String type = transEl.getAttribute(TAG_TYPE);
+        if ("Lookup Procedure".equalsIgnoreCase(type)) {
+            return false;
+        }
         String templateName = transEl.getAttribute("TEMPLATENAME");
         StringBuilder marker = new StringBuilder();
         marker.append(type).append(' ').append(templateName).append(' ');
@@ -5828,7 +6013,6 @@ public class DataSyncParser {
             || lower.contains("java class")
             || lower.contains("class name")
             || lower.contains("method name")
-            || lower.contains("procedure")
             || lower.contains("web service")
             || lower.contains("soap")
             || lower.contains("soapaction")

@@ -4,7 +4,7 @@ set -e
 SRC_DIR="src"
 BUILD_DIR="build"
 PLUGIN_ID="com.fr.plugin.tptj.ivan.jsd19083"
-PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.5}"
+PLUGIN_VERSION="${PLUGIN_VERSION:-0.5.7}"
 PLUGIN_NAME="fine-plugin-${PLUGIN_ID}-${PLUGIN_VERSION}"
 FDL_HOME="${FDL_HOME:-/mnt/d/FDL-tomcat-win64}"
 SOURCE_PLUGIN_VERSION="${SOURCE_PLUGIN_VERSION:-0.3.0}"
@@ -84,6 +84,7 @@ echo "Compiling core parsing files..."
 "$JAVAC" -encoding UTF-8 -cp "$CP" -d "$BUILD_DIR/classes" \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/GroupSQLInfo.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/WriterTargetSchemaPolicy.java \
+  src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/InfaSqlProjectionNormalizer.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/DataSyncParser.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/xml/WorkFlowParser.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/util/XmlParserUtil.java \
@@ -95,6 +96,7 @@ echo "Compiling core parsing files..."
   src/com/fr/plugin/tptj/ivan/jsd19083/constant/PluginConstants.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/Link.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/FdlWriteConfigHelper.java \
+  src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/FieldTransferFactory.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/InfaScopedParameterResolver.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/ConditionNodeBean.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/InvokeTaskNodeBean.java \
@@ -109,7 +111,9 @@ echo "Compiling core parsing files..."
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/ExpressionFieldInfo.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/FilterFieldInfo.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/FieldLineageInfo.java \
+  src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/InfaFieldMeta.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/LookupFieldInfo.java \
+  src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/MappingFieldBinding.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/db/TargetWriteInfo.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/bean/parse/core/fdl/api/ApiNodeFromInfoBean.java \
   src/com/fr/plugin/tptj/ivan/jsd19083/udf/InfaSoapHttpStatusUdf.java \

@@ -173,14 +173,10 @@ public class TransformSyncTaskNodeBean extends DefaultSingleXMLNodeBean {
     }
 
     private List<FieldTransferBean> createFieldTransferItems() {
-        List<FieldTransferBean> result = new ArrayList<FieldTransferBean>();
-        for (String fieldName : this.transformInfo.getOutputFields()) {
-            SqlFieldBean readColumn = new SqlFieldBean();
-            readColumn.setName(fieldName);
-            SqlFieldBean writeColumn = new SqlFieldBean();
-            writeColumn.setName(fieldName);
-            this.applyLineageComment(writeColumn);
-            result.add(new FieldTransferBean(readColumn, writeColumn, false));
+        List<FieldTransferBean> result = FieldTransferFactory.createForTransform(this.fieldLineageInfo,
+            this.toInfo == null ? null : this.toInfo.getTargetWriteInfo(), this.transformInfo.getOutputFields());
+        for (FieldTransferBean item : result) {
+            this.applyLineageComment(item.getWriteColumn());
         }
         return result;
     }

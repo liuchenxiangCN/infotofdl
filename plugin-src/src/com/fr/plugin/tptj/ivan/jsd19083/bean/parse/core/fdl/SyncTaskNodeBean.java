@@ -105,64 +105,14 @@ extends DefaultSingleXMLNodeBean {
         result.setWriter((ICoordinateDataFlowNode)this.getDBWriteNode());
         DBWriteNode dbWriteNode = (DBWriteNode)result.getWriter().getNodeContent();
         DBFieldTransferBean refresh = DBFieldTransferUtils.refreshWithoutError(result);
-        List<FieldTransferBean> fieldTransferItems = SyncTaskNodeBean.createFieldTransferItems(refresh, this.fieldLineageInfo);
-        if (fieldTransferItems.isEmpty()) {
-            fieldTransferItems = this.createOfflineFieldTransferItems();
+        List<FieldTransferBean> fieldTransferItems = FieldTransferFactory.createForSync(refresh, this.fieldLineageInfo,
+            this.toInfo == null ? null : this.toInfo.getTargetWriteInfo());
+        for (FieldTransferBean item : fieldTransferItems) {
+            SyncTaskNodeBean.applyLineageComment(item.getWriteColumn(), this.fieldLineageInfo);
         }
         dbWriteNode.setFieldTransferItems(fieldTransferItems);
         FdlWriteConfigHelper.applyWriteConfig(dbWriteNode, fieldTransferItems, this.toInfo == null ? null : this.toInfo.getTargetWriteInfo());
         result.getWriter().setNodeContent((DataFlowNode)dbWriteNode);
-        return result;
-    }
-
-    @NotNull
-    private List<FieldTransferBean> createOfflineFieldTransferItems() {
-        ArrayList<FieldTransferBean> result = new ArrayList<FieldTransferBean>();
-        if (this.fieldLineageInfo == null) {
-            return result;
-        }
-        for (String targetField : this.fieldLineageInfo.getTargetFields()) {
-            if (!StringUtils.isNotEmpty(targetField)) {
-                continue;
-            }
-            SqlFieldBean readColumn = new SqlFieldBean();
-            readColumn.setName(this.firstOfflineReadField(targetField));
-            SqlFieldBean writeColumn = new SqlFieldBean();
-            writeColumn.setName(targetField);
-            SyncTaskNodeBean.applyLineageComment(writeColumn, this.fieldLineageInfo);
-            result.add(new FieldTransferBean(readColumn, writeColumn, false));
-        }
-        return result;
-    }
-
-    private String firstOfflineReadField(String targetField) {
-        List<String> candidates = this.fieldLineageInfo.getReadCandidates(targetField);
-        for (String candidate : candidates) {
-            if (StringUtils.isNotEmpty(candidate)) {
-                return candidate;
-            }
-        }
-        return targetField;
-    }
-
-    @NotNull
-    private static List<FieldTransferBean> createFieldTransferItems(DBFieldTransferBean refresh, FieldLineageInfo fieldLineageInfo) {
-        List<SqlFieldBean> origin = refresh.getOrigin();
-        List<SqlFieldBean> target = refresh.getTarget();
-        ArrayList<FieldTransferBean> result = new ArrayList<FieldTransferBean>();
-        if (origin == null || target == null) {
-            return result;
-        }
-        for (SqlFieldBean targetFieldBean : target) {
-            SyncTaskNodeBean.applyLineageComment(targetFieldBean, fieldLineageInfo);
-            SqlFieldBean originFieldBean = SyncTaskNodeBean.findLineageOriginField(origin, targetFieldBean, fieldLineageInfo);
-            boolean lineageKnowsTarget = fieldLineageInfo != null && fieldLineageInfo.hasTargetField(targetFieldBean.getName());
-            if (originFieldBean == null && !lineageKnowsTarget) {
-                originFieldBean = SyncTaskNodeBean.findFieldByName(origin, targetFieldBean.getName());
-            }
-            if (originFieldBean == null) continue;
-            result.add(new FieldTransferBean(originFieldBean, targetFieldBean, false));
-        }
         return result;
     }
 
@@ -190,29 +140,6 @@ extends DefaultSingleXMLNodeBean {
             comment.append("Informatica Lookup Procedure: ").append(info.toVisibleLine()).append("\n");
         }
         targetFieldBean.setComment(comment.toString().trim());
-    }
-
-    private static SqlFieldBean findLineageOriginField(List<SqlFieldBean> origin, SqlFieldBean targetFieldBean, FieldLineageInfo fieldLineageInfo) {
-        if (fieldLineageInfo == null || fieldLineageInfo.isEmpty() || targetFieldBean == null) {
-            return null;
-        }
-        List<String> candidates = fieldLineageInfo.getReadCandidates(targetFieldBean.getName());
-        for (String candidate : candidates) {
-            SqlFieldBean originFieldBean = SyncTaskNodeBean.findFieldByName(origin, candidate);
-            if (originFieldBean != null) {
-                return originFieldBean;
-            }
-        }
-        return null;
-    }
-
-    private static SqlFieldBean findFieldByName(List<SqlFieldBean> fields, String name) {
-        for (SqlFieldBean field : fields) {
-            if (StringUtils.equalsIgnoreCase(field.getName(), name)) {
-                return field;
-            }
-        }
-        return null;
     }
 
     @NotNull

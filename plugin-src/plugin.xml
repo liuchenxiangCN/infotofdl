@@ -3,7 +3,7 @@
     <id>com.fr.plugin.tptj.ivan.jsd19083</id>
     <name><![CDATA[FDL XML批量生成任务_EK]]></name>
     <active>yes</active>
-    <version>0.5.5</version>
+    <version>0.5.7</version>
     <group>fdl</group>
     <env-version>4.2.10.1</env-version>
     <vendor>Ivan.Guo</vendor>
@@ -28,6 +28,8 @@
           [2026-07-10]0.5.3: 目标写入模式优先使用Target OWNERNAME与FDL目标连接模式，不再用Source OWNERNAME覆盖目标模式<br/>
           [2026-07-10]0.5.4: Oracle目标模式恢复0.3规则，使用目标连接用户名，不再使用可能返回ANONYMOUS的默认Schema<br/>
           [2026-07-10]0.5.5: 生成字段映射时恢复0.3的元数据刷新顺序，自动带出来源与目标字段类型，无需手工重新获取<br/>
+          [2026-07-13]0.5.6: 字段关系与类型改由Mapping/Connector及XML元数据生成，自动规范化SQL投影别名，并修复Lookup Procedure误识别为外部API<br/>
+          [2026-07-14]0.5.7: SQL投影别名改写保留SELECT/FROM边界空白；数据同步目标字段优先保留FDL在线刷新的实际类型与备注，消除任务打开后的结构变化误报<br/>
     ]]></change-notes>
     <main-package>com.fr.plugin.tptj.ivan.jsd19083</main-package>
     <lifecycle-monitor class="com.fr.plugin.tptj.ivan.jsd19083.LifecycleMonitorEK"/>

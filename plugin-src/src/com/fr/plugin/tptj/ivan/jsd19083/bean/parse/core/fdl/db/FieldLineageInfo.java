@@ -16,6 +16,13 @@ public class FieldLineageInfo {
     private List<FilterFieldInfo> filterInfos = new ArrayList<FilterFieldInfo>();
     private List<LookupFieldInfo> lookupInfos = new ArrayList<LookupFieldInfo>();
     private List<ConnectionMappingInfo> connectionInfos = new ArrayList<ConnectionMappingInfo>();
+    private List<MappingFieldBinding> fieldBindings = new ArrayList<MappingFieldBinding>();
+    private Map<String, List<InfaFieldMeta>> readerProjectionFields = new LinkedHashMap<String, List<InfaFieldMeta>>();
+    private Set<String> unavailableReaderFields = new LinkedHashSet<String>();
+    private String sqlProjectionStatus;
+    private String sqlProjectionLimitation;
+    private String originalSql;
+    private String effectiveSql;
     private Set<String> knownTargetFields = new LinkedHashSet<String>();
     private Map<String, String> knownTargetFieldNames = new LinkedHashMap<String, String>();
 
@@ -58,6 +65,96 @@ public class FieldLineageInfo {
             return new ArrayList<String>();
         }
         return new ArrayList<String>(candidates);
+    }
+
+    public void addFieldBinding(MappingFieldBinding binding) {
+        if (binding == null || safe(binding.getTargetField()).length() == 0) {
+            return;
+        }
+        for (MappingFieldBinding existing : fieldBindings) {
+            if (existing.identityKey().equals(binding.identityKey())) {
+                return;
+            }
+        }
+        fieldBindings.add(binding);
+        markTargetField(binding.getTargetField());
+    }
+
+    public List<MappingFieldBinding> getFieldBindings(TargetWriteInfo targetWriteInfo) {
+        List<MappingFieldBinding> result = new ArrayList<MappingFieldBinding>();
+        String targetInstance = targetWriteInfo == null ? "" : safe(targetWriteInfo.getTargetInstance());
+        String targetDefinition = targetWriteInfo == null ? "" : safe(targetWriteInfo.getTargetDefinition());
+        for (MappingFieldBinding binding : fieldBindings) {
+            if (targetInstance.length() > 0 && normalize(binding.getTargetInstance()).equals(normalize(targetInstance))) {
+                result.add(binding);
+            } else if (targetInstance.length() == 0 && targetDefinition.length() > 0
+                && normalize(binding.getTargetDefinition()).equals(normalize(targetDefinition))) {
+                result.add(binding);
+            } else if (targetInstance.length() == 0 && targetDefinition.length() == 0) {
+                result.add(binding);
+            }
+        }
+        return result;
+    }
+
+    public MappingFieldBinding findBinding(TargetWriteInfo targetWriteInfo, String targetField) {
+        for (MappingFieldBinding binding : getFieldBindings(targetWriteInfo)) {
+            if (normalize(binding.getTargetField()).equals(normalize(targetField))) {
+                return binding;
+            }
+        }
+        return null;
+    }
+
+    public void addReaderProjectionField(String readerInstance, InfaFieldMeta field) {
+        if (field == null || safe(readerInstance).length() == 0 || safe(field.getFieldName()).length() == 0) {
+            return;
+        }
+        List<InfaFieldMeta> fields = readerProjectionFields.get(readerInstance);
+        if (fields == null) {
+            fields = new ArrayList<InfaFieldMeta>();
+            readerProjectionFields.put(readerInstance, fields);
+        }
+        fields.add(field);
+    }
+
+    public List<InfaFieldMeta> getSingleReaderProjectionFields() {
+        if (readerProjectionFields.size() != 1) {
+            return new ArrayList<InfaFieldMeta>();
+        }
+        return new ArrayList<InfaFieldMeta>(readerProjectionFields.values().iterator().next());
+    }
+
+    public void setSqlProjectionResult(String status, String limitation, List<String> unavailableFields) {
+        this.sqlProjectionStatus = safe(status);
+        this.sqlProjectionLimitation = safe(limitation);
+        this.unavailableReaderFields.clear();
+        if (unavailableFields != null) {
+            for (String field : unavailableFields) {
+                this.unavailableReaderFields.add(normalize(field));
+            }
+        }
+    }
+
+    public boolean isReaderFieldAvailable(String fieldName) {
+        return !unavailableReaderFields.contains(normalize(fieldName));
+    }
+
+    public String getSqlProjectionStatus() {
+        return safe(sqlProjectionStatus);
+    }
+
+    public void setProjectionSql(String originalSql, String effectiveSql) {
+        this.originalSql = originalSql == null ? "" : originalSql;
+        this.effectiveSql = effectiveSql == null ? "" : effectiveSql;
+    }
+
+    public String getOriginalSql() {
+        return originalSql == null ? "" : originalSql;
+    }
+
+    public String getEffectiveSql() {
+        return effectiveSql == null ? "" : effectiveSql;
     }
 
     public void addExpressionInfo(ExpressionFieldInfo expressionInfo) {
@@ -216,7 +313,8 @@ public class FieldLineageInfo {
     }
 
     public boolean hasVisibleInfos() {
-        return hasExpressionInfos() || hasFilterInfos() || hasLookupInfos() || hasConnectionInfos();
+        return hasExpressionInfos() || hasFilterInfos() || hasLookupInfos() || hasConnectionInfos()
+            || safe(sqlProjectionStatus).length() > 0;
     }
 
     public String getVisibleNote() {
@@ -241,11 +339,17 @@ public class FieldLineageInfo {
         for (ConnectionMappingInfo info : connectionInfos) {
             note.append("\nConnection ").append(++index).append(": ").append(info.toVisibleLine());
         }
+        if (safe(sqlProjectionStatus).length() > 0) {
+            note.append("\nSQL projection: ").append(sqlProjectionStatus);
+            if (safe(sqlProjectionLimitation).length() > 0) {
+                note.append(" - ").append(sqlProjectionLimitation);
+            }
+        }
         return note.toString();
     }
 
     public boolean isEmpty() {
-        return knownTargetFields.isEmpty() && targetToReadCandidates.isEmpty() && !hasVisibleInfos();
+        return knownTargetFields.isEmpty() && targetToReadCandidates.isEmpty() && fieldBindings.isEmpty() && !hasVisibleInfos();
     }
 
     public int size() {
